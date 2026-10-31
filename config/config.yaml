@@ -1,0 +1,126 @@
+# =============================================================================
+# BeastAffinity pipeline configuration
+#
+# Every step (Python and R) reads its parameters from this file, so this is
+# the only place you need to edit. Paths are relative to the repository root.
+# To run with another file:  snakemake --cores 8 --config cfg=path/to/my.yaml
+# A config can inherit from another one with `base: config/config.yaml`.
+# =============================================================================
+
+# --- Input -------------------------------------------------------------------
+# Folder with the PDB ID lists exported from RCSB Advanced Search
+# (.txt or .txt.gz; IDs separated by commas, whitespace or one per line).
+input_dir: pdb_ids
+
+# --- Resources ---------------------------------------------------------------
+workers: 6              # parallel processes for the parsing steps (02, 06, 08)
+download_workers: 12    # parallel HTTP connections (01, 04)
+threads: 8              # MMseqs2 threads (09)
+
+# --- 01-02 PISA (PDBe) -------------------------------------------------------
+pisa:
+  # Bulk PISA-lite JSON from PDBe: {subdir}/{id}_assembly{n}[_interfaces].json
+  base_url: https://ftp.ebi.ac.uk/pub/databases/msd/pdb-assemblies-analysis/split
+  # 02 keeps an interface as a candidate pair only if:
+  min_interface_area: 800      # interface_area >= this (A^2)
+  max_p_value: 0.5             # p_value <= this
+  expand_multiprotein: true    # >2 protein molecules -> one row per protein pair
+
+# --- 04 Structures (RCSB) ----------------------------------------------------
+structures:
+  base_url: https://files.rcsb.org/download   # {id}.cif.gz, {id}-assembly{n}.cif.gz
+
+# --- 06 mmCIF enrichment -----------------------------------------------------
+enrichment:
+  homo_similarity: 0.80        # is_homo_80: positional identity >= this
+  ignore_hydrogens: true
+
+# --- 07 Quality filter (R) ---------------------------------------------------
+quality_filter:
+  exptl_method: "X-RAY DIFFRACTION"
+  min_coverage: 0.86           # both chains: coverage > this
+  max_r_free: 0.28             # r_free < this
+  max_p_value: 0.4             # p_value <= this
+  min_chain_length: 12         # both chains: length > this
+  max_chain_length: 600        # both chains: length <= this
+  min_interface_area: 800      # interface_area > this
+  max_interface_area: 5400     # interface_area <= this
+  max_solvation_density: -0.0068   # solvation_energy / interface_area < this
+  gold_max_p_value: 0.2        # tier "gold" if p_value < this, else "silver"
+
+# --- 08 Special residues -----------------------------------------------------
+special_residues:
+  allowed: [MSE, SEM, SEC]     # non-standard residues tolerated in a chain
+
+# --- 09 Chain clustering (MMseqs2) -------------------------------------------
+clustering:
+  thresholds: [0.98, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40]
+  coverage: 0.90
+  cov_mode: 1
+  engine: cluster              # "cluster" (sensitive) or "linclust" (fast)
+
+# --- 10 Redundancy pruning (R) -----------------------------------------------
+pruning:
+  pair_key: pair_cluster_98
+  exact_dedup_mode: softcap
+  exact_K_homo: 2
+  exact_K_heter: 4
+  activate_n: 8
+  area_range_pct_thr: 4.0
+  K_redund_homo: 2
+  K_redund_heter: 4
+  K_var_homo: 4
+  K_var_heter: 8
+
+# --- 11 Test set (R) ---------------------------------------------------------
+test_set:
+  seed: 7
+  n_c3_40: 100
+  n_c3_50: 100
+  n_c1: 300
+  n_c2_c70: 100
+  n_c2_c80: 100
+  nbins_len: 4
+  nbins_area: 4
+  homo_frac: 0.5
+  c3_mult: 12
+  c2_chain_cap_98_global: 1
+  c2_min_remain_chain: 1
+
+# --- 12 Train/validation splits (R) ------------------------------------------
+splits:
+  val_frac: 0.10
+  seed: 48
+  validation_split: split_c90  # split column exported as the validation set
+
+# --- File layout -------------------------------------------------------------
+# Everything the pipeline downloads or produces lives under data_dir.
+data_dir: data
+
+paths:
+  ids: "{data_dir}/interim/01_pdb_ids.txt"
+  ids_rejected: "{data_dir}/reports/01_rejected_tokens.tsv"
+  pisa_dir: "{data_dir}/raw/pisa"
+  pisa_manifest: "{data_dir}/raw/pisa_manifest.tsv"
+  master_pisa: "{data_dir}/interim/02_master_pisa.csv"
+  master_selected: "{data_dir}/interim/03_master_pisa_selected.csv"
+  needed_pairs: "{data_dir}/interim/03_needed_pairs.csv"
+  asu_dir: "{data_dir}/raw/asu"
+  assembly_dir: "{data_dir}/raw/assemblies"
+  structures_manifest: "{data_dir}/raw/structures_manifest.tsv"
+  audit: "{data_dir}/reports/05_audit_downloads.json"
+  entry_metadata: "{data_dir}/interim/06_entry_metadata.csv"
+  chain_metadata: "{data_dir}/interim/06_chain_metadata.csv"
+  enriched: "{data_dir}/interim/06_enriched.csv"
+  quality_filtered: "{data_dir}/interim/07_quality_filtered.csv"
+  quality_plots: "{data_dir}/reports/07_quality_filter_plots.pdf"
+  special_residues: "{data_dir}/interim/08_special_residues.csv"
+  clustering_dir: "{data_dir}/interim/09_mmseqs"
+  clustered: "{data_dir}/interim/09_clustered.csv"
+  pruned: "{data_dir}/interim/10_pruned.csv"
+  trainval_pool: "{data_dir}/interim/11_trainval_pool.csv"
+  test: "{data_dir}/processed/test.csv"
+  trainval_splits: "{data_dir}/processed/trainval_splits.csv"
+  validation: "{data_dir}/processed/validation.csv"
+  reports_dir: "{data_dir}/reports"
+  logs_dir: "{data_dir}/logs"

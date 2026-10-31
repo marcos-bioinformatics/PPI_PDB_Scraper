@@ -1,0 +1,20 @@
+name: beastaffinity
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - pandas>=2.1
+  - numpy
+  - biopython>=1.83
+  - requests
+  - urllib3>=2
+  - pyyaml
+  - tqdm
+  - mmseqs2
+  - snakemake-minimal>=8
+  - r-base>=4.3
+  - r-dplyr
+  - r-tidyr
+  - r-data.table
+  - r-yaml

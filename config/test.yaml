@@ -1,0 +1,15 @@
+# Small end-to-end test: 1,500 PDB IDs (tests/pdb_ids), separate data folder
+# and a scaled-down test set. Everything else is inherited from config.yaml.
+#
+#   snakemake --cores 8 --config cfg=config/test.yaml
+base: config/config.yaml
+
+input_dir: tests/pdb_ids
+data_dir: data_test
+
+test_set:
+  n_c3_40: 10
+  n_c3_50: 10
+  n_c1: 30
+  n_c2_c70: 10
+  n_c2_c80: 10

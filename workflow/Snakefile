@@ -1,0 +1,230 @@
+"""BeastAffinity pipeline.
+
+Run from the repository root (conda activate beastaffinity):
+
+    snakemake -n                                       # dry run: show what would run
+    snakemake --cores 8                                # run the whole pipeline
+    snakemake --cores 8 --until quality_filter         # stop after a given step
+    snakemake --cores 8 --config cfg=config/test.yaml  # use another config file
+    snakemake --dag | dot -Tsvg > dag.svg              # draw the workflow
+
+Each rule runs one numbered script from scripts/; the scripts read all their
+parameters from the YAML config, so they can also be run by hand. When the
+config section a step uses changes, Snakemake reruns that step and everything
+downstream of it.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "scripts")
+from common import load_config  # noqa: E402
+
+CFG_FILE = config.get("cfg", "config/config.yaml")
+C = load_config(CFG_FILE)
+P = C["paths"]
+LOGS = P["logs_dir"]
+ID_LISTS = sorted(str(p) for p in Path(C["input_dir"]).glob("*.txt*"))
+
+
+def py(script):
+    return f"python scripts/{script}.py --config {CFG_FILE} 2>&1 | tee {{log}}"
+
+
+def r(script):
+    return f"Rscript scripts/{script}.R {CFG_FILE} 2>&1 | tee {{log}}"
+
+
+def section(name):
+    """Config section as a string, so a change in it triggers a rerun."""
+    return str(C[name])
+
+
+rule all:
+    input:
+        P["test"],
+        P["trainval_splits"],
+        P["validation"],
+
+
+rule download_pisa:
+    input:
+        ID_LISTS,
+    output:
+        ids=P["ids"],
+        manifest=P["pisa_manifest"],
+    params:
+        pisa=C["pisa"]["base_url"],
+    log:
+        f"{LOGS}/01_download_pisa.log",
+    shell:
+        py("01_download_pisa")
+
+
+rule parse_pisa:
+    input:
+        P["pisa_manifest"],
+    output:
+        P["master_pisa"],
+    params:
+        section("pisa"),
+    threads: C["workers"]
+    log:
+        f"{LOGS}/02_parse_pisa.log",
+    shell:
+        py("02_parse_pisa")
+
+
+rule select_assemblies:
+    input:
+        P["master_pisa"],
+        P["ids"],
+    output:
+        P["master_selected"],
+        P["needed_pairs"],
+    log:
+        f"{LOGS}/03_select_assemblies.log",
+    shell:
+        r("03_select_assemblies")
+
+
+rule download_structures:
+    input:
+        P["needed_pairs"],
+    output:
+        P["structures_manifest"],
+    params:
+        section("structures"),
+    log:
+        f"{LOGS}/04_download_structures.log",
+    shell:
+        py("04_download_structures")
+
+
+rule audit_downloads:
+    input:
+        P["ids"],
+        P["pisa_manifest"],
+        P["master_pisa"],
+        P["needed_pairs"],
+        P["structures_manifest"],
+    output:
+        P["audit"],
+    log:
+        f"{LOGS}/05_audit_downloads.log",
+    shell:
+        py("05_audit_downloads")
+
+
+rule enrich_mmcif:
+    input:
+        P["master_selected"],
+        P["structures_manifest"],
+        P["audit"],
+    output:
+        P["enriched"],
+        P["entry_metadata"],
+        P["chain_metadata"],
+    params:
+        section("enrichment"),
+    threads: C["workers"]
+    log:
+        f"{LOGS}/06_enrich_mmcif.log",
+    shell:
+        py("06_enrich_mmcif")
+
+
+rule quality_filter:
+    input:
+        P["enriched"],
+    output:
+        P["quality_filtered"],
+        P["quality_plots"],
+    params:
+        section("quality_filter"),
+    log:
+        f"{LOGS}/07_quality_filter.log",
+    shell:
+        r("07_quality_filter")
+
+
+rule filter_special_residues:
+    input:
+        P["quality_filtered"],
+        P["structures_manifest"],
+    output:
+        P["special_residues"],
+    params:
+        section("special_residues"),
+    threads: C["workers"]
+    log:
+        f"{LOGS}/08_filter_special_residues.log",
+    shell:
+        py("08_filter_special_residues")
+
+
+rule cluster_chains:
+    input:
+        P["special_residues"],
+    output:
+        P["clustered"],
+        f"{P['clustering_dir']}/summary.json",
+    params:
+        section("clustering"),
+    threads: C["threads"]
+    log:
+        f"{LOGS}/09_cluster_chains.log",
+    shell:
+        py("09_cluster_chains")
+
+
+rule prune_redundancy:
+    input:
+        P["clustered"],
+    output:
+        P["pruned"],
+    params:
+        section("pruning"),
+    log:
+        f"{LOGS}/10_prune_redundancy.log",
+    shell:
+        r("10_prune_redundancy")
+
+
+rule build_test_set:
+    input:
+        P["pruned"],
+    output:
+        P["test"],
+        P["trainval_pool"],
+    params:
+        section("test_set"),
+    log:
+        f"{LOGS}/11_build_test_set.log",
+    shell:
+        r("11_build_test_set")
+
+
+rule trainval_splits:
+    input:
+        P["trainval_pool"],
+    output:
+        P["trainval_splits"],
+        P["validation"],
+    params:
+        section("splits"),
+    log:
+        f"{LOGS}/12_trainval_splits.log",
+    shell:
+        r("12_trainval_splits")
+
+
+# Optional exploratory analysis (not part of `all`):
+#   snakemake --cores 1 clustering_stats
+rule clustering_stats:
+    input:
+        P["clustered"],
+    output:
+        f"{P['reports_dir']}/clustering_stats.txt",
+    shell:
+        f"Rscript analysis/clustering_stats.R {CFG_FILE} > {{output}} 2>&1"

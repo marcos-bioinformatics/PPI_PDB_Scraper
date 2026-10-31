@@ -1,0 +1,23 @@
+# Pipeline data (downloads, intermediate and final tables)
+data/
+data_test/
+
+# Your own RCSB ID exports (keep the folder, not the lists)
+pdb_ids/*.txt
+pdb_ids/*.txt.gz
+
+# Snakemake
+.snakemake/
+
+# Python / R / IDE
+__pycache__/
+*.pyc
+.Rhistory
+.RData
+.Rproj.user/
+Rplots.pdf
+.idea/
+.vscode/
+
+# Windows copy artefacts
+*:Zone.Identifier
