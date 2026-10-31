@@ -16,11 +16,12 @@ changed is how the steps are wired together, plus a few bug fixes.
 | `05_audit_downloads.py` | `0_audit_db_folders.py` |
 | `06_enrich_mmcif.py` | `3_CIF_scrapping_ASU_Assembly.py` |
 | `07_quality_filter.R` | `mmcif_enrichment_out/masterr_csv_164k.R` |
-| `08_filter_special_residues.py` | `4_filter_special_residues_SR.py` |
+| `08_check_structures.py` | `4_filter_special_residues_SR.py` + contact check (KD-tree adapted from `NeighborSearch.py` / `Test_distance.py` of the ML code) |
 | `09_cluster_chains.py` | `5_clustering.py` |
 | `10_prune_redundancy.R` | `mmseqs_chain_clustering_out/2_pruning_98.R` |
 | `11_build_test_set.R` | `mmseqs_chain_clustering_out/3_test_set_datatable.R` |
 | `12_trainval_splits.R` | `mmseqs_chain_clustering_out/4_trainval_splits.R` (+ the validation export done by hand) |
+| `13_hard_negatives.py` | new (Seq5 had in-assembly negatives with label conflicts; see below) |
 | `analysis/clustering_stats.R` | `mmseqs_chain_clustering_out/1_clustering_stats.R` |
 | — | `5_last_filtering.R` (the length cut is now a parameter of step 07) |
 
@@ -37,6 +38,18 @@ changed is how the steps are wired together, plus a few bug fixes.
   190,214 assemblies downloaded, 69,577 entries / 93,022 assemblies needed).
 - **Compressed storage.** mmCIF files are kept as `.cif.gz` and PISA JSON as
   `.json.gz` (about 10x smaller).
+
+## New in v1
+
+- **Contact check (step 08).** Every PISA pair must have heavy-atom contacts in
+  the assembly structure; this guards against chain-mapping errors.
+- **Stale PISA assemblies (step 01).** The PDBe dump keeps files of assemblies
+  removed in later entry revisions (e.g. 5u1j); only current assemblies are used.
+- **Hard negatives (step 13).** Seq5 labelled every non-interacting chain pair
+  as negative, which produced pairs that were positive and negative at the same
+  time (same sequences). v1 keeps hetero pairs only, removes cluster-level
+  conflicts, requires a minimum distance and assigns each negative to the split
+  of its proteins.
 
 ## Bug fixes
 

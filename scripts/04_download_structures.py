@@ -56,7 +56,7 @@ def main() -> None:
     manifest = ensure_parent(paths["structures_manifest"])
     tmp = manifest.with_name(manifest.name + ".part")
     with tmp.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh, delimiter="\t")
+        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
         w.writerow(["kind", "pdb_id", "assembly_id", "path", "status"])
         for (kind, pid, asm, _url, dest), status in results:
             w.writerow([kind, pid, asm, dest, status])

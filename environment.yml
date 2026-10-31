@@ -12,6 +12,7 @@ dependencies:
   - pyyaml
   - tqdm
   - mmseqs2
+  - scipy
   - snakemake-minimal>=8
   - r-base>=4.3
   - r-dplyr

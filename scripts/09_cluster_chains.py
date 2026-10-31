@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step 09 - Cluster all chain sequences with MMseqs2 at several identity thresholds.
 
-Input : paths.special_residues (step 08)
+Input : paths.checked (step 08)
 Output: paths.clustered        input rows + molA/molB/pair cluster IDs per threshold
         paths.clustering_dir/  unique_sequences.fasta, cXX/clusters.tsv, summary.txt/json
 
@@ -12,7 +12,6 @@ Unique sequences are identified by sha1(sequence)[:16]. For each threshold XX:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import subprocess
@@ -24,13 +23,9 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
-from common import ensure_parent, get_logger, parse_args
+from common import ensure_parent, get_logger, parse_args, seq_uid
 
 log = get_logger("09_cluster_chains")
-
-
-def seq_uid(seq: str) -> str:
-    return hashlib.sha1(seq.encode("utf-8")).hexdigest()[:16]
 
 
 def thr_tag(thr: float) -> str:
@@ -100,7 +95,7 @@ def main() -> None:
     out_dir = Path(paths["clustering_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(paths["special_residues"], keep_default_na=False, na_values=[""],
+    df = pd.read_csv(paths["checked"], keep_default_na=False, na_values=[""],
                      dtype={"pdb_id": str, "molA_chain_id": str, "molB_chain_id": str})
 
     uid_a = df["molA_seq"].map(seq_uid)

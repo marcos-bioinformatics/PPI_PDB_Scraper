@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -116,6 +117,11 @@ def read_id_lists(input_dir: str | Path) -> Tuple[List[str], List[Tuple[str, str
 def read_ids_file(path: str | Path) -> List[str]:
     with Path(path).open("r", encoding="utf-8") as fh:
         return [ln.strip() for ln in fh if ln.strip()]
+
+
+def seq_uid(seq: str) -> str:
+    """Stable identifier of a sequence: first 16 hex characters of its SHA-1."""
+    return hashlib.sha1(seq.encode("utf-8")).hexdigest()[:16]
 
 
 def pisa_subdir(pdb_id: str) -> str:

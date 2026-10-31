@@ -10,9 +10,11 @@ Starting from any set of IDs exported from the RCSB Advanced Search, it:
 2. keeps protein–protein interfaces as candidate chain pairs,
 3. downloads only the mmCIF files those pairs need (asymmetric unit + biological assemblies),
 4. adds sequence, coverage and experimental-quality metadata to every pair,
-5. filters by quality and removes chains with non-standard residues,
+5. filters by quality, removes chains with non-standard residues and checks
+   that every PISA interface has real atomic contacts,
 6. clusters all chains with MMseqs2 at eight identity thresholds,
-7. prunes redundancy and builds a test set (C1/C2/C3) and cluster-aware train/val splits.
+7. prunes redundancy and builds a test set (C1/C2/C3) and cluster-aware train/val splits,
+8. optionally adds **hard negatives**: chains of the same complex that are not in contact.
 
 ## Pipeline
 
@@ -28,11 +30,12 @@ clustering); R steps take the data-analysis decisions (filters, pruning, splits)
 | 05 | `05_audit_downloads.py` | Checks that every needed file is on disk | `05_audit_downloads.json` |
 | 06 | `06_enrich_mmcif.py` | Sequences, coverage, homo/hetero, method, resolution, R-free | `06_enriched.csv` |
 | 07 | `07_quality_filter.R` | Exploratory analysis + quality filter + gold/silver tier | `07_quality_filtered.csv` |
-| 08 | `08_filter_special_residues.py` | Drops chains with non-standard amino acids | `08_special_residues.csv` |
+| 08 | `08_check_structures.py` | Drops chains with non-standard amino acids and pairs without atomic contacts | `08_checked.csv` |
 | 09 | `09_cluster_chains.py` | MMseqs2 chain clustering at 98–40 % identity | `09_clustered.csv` |
 | 10 | `10_prune_redundancy.R` | Exact-duplicate soft cap + pruning in `pair_cluster_98` | `10_pruned.csv` |
 | 11 | `11_build_test_set.R` | Test set: C1 (train-like), C2 (new pairs), C3 (unseen proteins) | `processed/test.csv` |
 | 12 | `12_trainval_splits.R` | Cluster-aware train/val splits and family weights | `processed/trainval_splits.csv`, `processed/validation.csv` |
+| 13 | `13_hard_negatives.py` | Non-contacting chain pairs of the same assembly, assigned to splits | `processed/hard_negatives.csv` |
 
 `analysis/clustering_stats.R` is an optional exploratory report on the clusters
 (`snakemake --cores 1 clustering_stats`).
@@ -41,8 +44,8 @@ clustering); R steps take the data-analysis decisions (filters, pruning, splits)
 flowchart LR
   ids[RCSB ID lists] --> s01[01 PISA download] --> s02[02 parse PISA] --> s03[03 select assemblies]
   s03 --> s04[04 mmCIF download] --> s05[05 audit] --> s06[06 enrich]
-  s06 --> s07[07 quality filter] --> s08[08 special residues] --> s09[09 MMseqs2]
-  s09 --> s10[10 prune] --> s11[11 test set] --> s12[12 train/val splits]
+  s06 --> s07[07 quality filter] --> s08[08 structure checks] --> s09[09 MMseqs2]
+  s09 --> s10[10 prune] --> s11[11 test set] --> s12[12 train/val splits] --> s13[13 hard negatives]
 ```
 
 ## Installation
@@ -91,6 +94,65 @@ or `Rscript scripts/07_quality_filter.R config/config.yaml`.
 snakemake --cores 8 --config cfg=config/test.yaml
 ```
 
+## Choosing the parameters
+
+Every threshold is in `config/config.yaml`. The defaults reproduce the
+BeastAffinitySeq8 dataset, but most of them are a matter of what the dataset
+is for; the notes below explain what each group means.
+
+**PISA pre-filter (`pisa`, step 02).** PISA reports `interface_area` as the
+solvent-accessible area buried *per side* (half of the total buried surface),
+so 800 Å² means about 1,600 Å² buried in total, above the typical range of
+crystal-packing contacts. `p_value` is PISA's ΔiG P-value: the probability of
+finding a more hydrophobic patch of the same size by chance; values below 0.5
+suggest an interaction-specific interface. PISA-lite does not provide the
+complexation significance score (CSS) of classic PISA, so specificity relies
+on area, P-value and solvation energy. These two values are only a pre-filter
+(they decide which structures are downloaded); the final thresholds are set in
+`quality_filter` and can only be stricter. Only the assemblies an entry has
+today are used (`only_current_assemblies`): the PDBe dump can keep assemblies
+removed in later revisions.
+
+**Quality filter (`quality_filter`, step 07).** Experimental method, R-free,
+minimum coverage of both chains (resolved / SEQRES residues), chain length
+range, interface area range, P-value and solvation density
+(`solvation_energy / interface_area`, nearly independent of interface size).
+`max_chain_length` is often limited by the model you plan to train.
+
+**Structure checks (`special_residues`, `contacts`, step 08).** Chains with
+non-standard amino acids other than the allowed ones are dropped. Every pair
+must also have at least `min_residue_contacts` residue pairs with heavy atoms
+within `cutoff` Å; this catches PISA interfaces that cannot be mapped onto the
+structure.
+
+**Redundancy (`pruning`, step 10).** Many entries contain several copies of
+the same complex (non-crystallographic symmetry, several assemblies), and close
+homologues appear across entries. Identical sequence pairs are soft-capped to
+`exact_K_homo` / `exact_K_heter` rows, and pair clusters (`pair_key`, 98 %
+identity by default) with more than `activate_n` rows are pruned to
+`K_redund_*` rows when their interface areas are almost identical, or to
+`K_var_*` rows chosen across interface-area bins otherwise. Keeping several
+copies (2 homo / 4 hetero by default) preserves close variants such as point
+mutants; set the caps to 1 for a strictly non-redundant dataset.
+
+**Test set and splits (`test_set`, `splits`, steps 11–12).** C1 rows are
+train-like, C2 rows are new pairings of known proteins (pair clusters at 70 and
+80 %), C3 rows contain proteins unseen in training (chain clusters at 40 and
+50 %). Train/validation splits are made by pair cluster, stratified by
+homo/hetero, with a family weight of 1/√(cluster size).
+
+**Hard negatives (`hard_negatives`, step 13).** Two protein chains of the
+same biological assembly with no PISA interface between them. Homo pairs are
+excluded by default (a copy of a protein not touching another copy usually
+contradicts a homo interface elsewhere in the complex). A negative is dropped
+if its pair of chain clusters (`conflict_level`) is in contact in any
+downloaded assembly, if it fails the quality thresholds of step 07, if a chain
+has forbidden residues or if the chains are closer than `min_distance` Å. One
+negative is kept per entry and sequence pair, and at most `max_per_entry` per
+entry, so that ribosomes and capsids do not dominate. Each negative inherits
+the split of its proteins (test if any chain is in the test set or in a
+held-out C3 cluster).
+
 ## Outputs
 
 All files are written under `data/` (configurable with `data_dir`):
@@ -99,7 +161,7 @@ All files are written under `data/` (configurable with `data_dir`):
 data/
 ├── raw/         PISA JSON (gzipped) and mmCIF files, with download manifests
 ├── interim/     tables of steps 01–11
-├── processed/   test.csv, trainval_splits.csv, validation.csv
+├── processed/   test.csv, trainval_splits.csv, validation.csv, hard_negatives.csv
 ├── reports/     audits, parse errors, quality-filter plots
 └── logs/        one log per step
 ```

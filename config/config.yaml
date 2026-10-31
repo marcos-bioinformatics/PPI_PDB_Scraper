@@ -21,10 +21,15 @@ threads: 8              # MMseqs2 threads (09)
 pisa:
   # Bulk PISA-lite JSON from PDBe: {subdir}/{id}_assembly{n}[_interfaces].json
   base_url: https://ftp.ebi.ac.uk/pub/databases/msd/pdb-assemblies-analysis/split
-  # 02 keeps an interface as a candidate pair only if:
-  min_interface_area: 800      # interface_area >= this (A^2)
-  max_p_value: 0.5             # p_value <= this
-  expand_multiprotein: true    # >2 protein molecules -> one row per protein pair
+  # PDBe can keep files of assemblies removed in later revisions of an entry;
+  # if true, only the assemblies the entry has today (RCSB Data API) are used.
+  only_current_assemblies: true
+  rcsb_graphql_url: https://data.rcsb.org/graphql
+  # Pre-filter of step 02: a protein-protein interface becomes a candidate pair
+  # only if it passes both thresholds. They also decide which structures are
+  # downloaded, so the final thresholds (step 07) can only be stricter.
+  min_interface_area: 800      # interface_area >= this (A^2 buried per side)
+  max_p_value: 0.5             # PISA Delta-iG P-value <= this (<0.5: more hydrophobic than random)
 
 # --- 04 Structures (RCSB) ----------------------------------------------------
 structures:
@@ -48,9 +53,12 @@ quality_filter:
   max_solvation_density: -0.0068   # solvation_energy / interface_area < this
   gold_max_p_value: 0.2        # tier "gold" if p_value < this, else "silver"
 
-# --- 08 Special residues -----------------------------------------------------
+# --- 08 Structure checks -----------------------------------------------------
 special_residues:
   allowed: [MSE, SEM, SEC]     # non-standard residues tolerated in a chain
+contacts:
+  cutoff: 4.5                  # heavy-atom distance (A) that defines a contact
+  min_residue_contacts: 1      # positives need at least this many residue pairs in contact
 
 # --- 09 Chain clustering (MMseqs2) -------------------------------------------
 clustering:
@@ -93,6 +101,18 @@ splits:
   seed: 48
   validation_split: split_c90  # split column exported as the validation set
 
+# --- 13 Hard negatives -------------------------------------------------------
+# Two protein chains of the same biological assembly with no PISA interface
+# between them (co-complexed but not in contact).
+hard_negatives:
+  enabled: true
+  include_homo: false          # also identical-sequence pairs (usually contradict a homo contact)
+  conflict_level: c95          # drop a negative if its pair of chain clusters (c98, c95, ... or
+                               # "exact" sequences) is in contact in any downloaded assembly
+  min_distance: 6.0            # minimum heavy-atom distance between the two chains (A)
+  max_per_entry: 5             # random sample per PDB entry (large complexes would dominate)
+  seed: 13
+
 # --- File layout -------------------------------------------------------------
 # Everything the pipeline downloads or produces lives under data_dir.
 data_dir: data
@@ -114,7 +134,7 @@ paths:
   enriched: "{data_dir}/interim/06_enriched.csv"
   quality_filtered: "{data_dir}/interim/07_quality_filtered.csv"
   quality_plots: "{data_dir}/reports/07_quality_filter_plots.pdf"
-  special_residues: "{data_dir}/interim/08_special_residues.csv"
+  checked: "{data_dir}/interim/08_checked.csv"
   clustering_dir: "{data_dir}/interim/09_mmseqs"
   clustered: "{data_dir}/interim/09_clustered.csv"
   pruned: "{data_dir}/interim/10_pruned.csv"
@@ -122,5 +142,6 @@ paths:
   test: "{data_dir}/processed/test.csv"
   trainval_splits: "{data_dir}/processed/trainval_splits.csv"
   validation: "{data_dir}/processed/validation.csv"
+  hard_negatives: "{data_dir}/processed/hard_negatives.csv"
   reports_dir: "{data_dir}/reports"
   logs_dir: "{data_dir}/logs"

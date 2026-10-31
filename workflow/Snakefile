@@ -45,6 +45,7 @@ rule all:
         P["test"],
         P["trainval_splits"],
         P["validation"],
+        P["hard_negatives"] if C["hard_negatives"]["enabled"] else [],
 
 
 rule download_pisa:
@@ -148,24 +149,25 @@ rule quality_filter:
         r("07_quality_filter")
 
 
-rule filter_special_residues:
+rule check_structures:
     input:
         P["quality_filtered"],
         P["structures_manifest"],
     output:
-        P["special_residues"],
+        P["checked"],
     params:
         section("special_residues"),
+        section("contacts"),
     threads: C["workers"]
     log:
-        f"{LOGS}/08_filter_special_residues.log",
+        f"{LOGS}/08_check_structures.log",
     shell:
-        py("08_filter_special_residues")
+        py("08_check_structures")
 
 
 rule cluster_chains:
     input:
-        P["special_residues"],
+        P["checked"],
     output:
         P["clustered"],
         f"{P['clustering_dir']}/summary.json",
@@ -217,6 +219,27 @@ rule trainval_splits:
         f"{LOGS}/12_trainval_splits.log",
     shell:
         r("12_trainval_splits")
+
+
+rule hard_negatives:
+    input:
+        P["chain_metadata"],
+        P["entry_metadata"],
+        P["clustered"],
+        P["test"],
+        P["trainval_splits"],
+    output:
+        P["hard_negatives"],
+    params:
+        section("hard_negatives"),
+        section("quality_filter"),
+        section("special_residues"),
+        section("contacts"),
+    threads: C["workers"]
+    log:
+        f"{LOGS}/13_hard_negatives.log",
+    shell:
+        py("13_hard_negatives")
 
 
 # Optional exploratory analysis (not part of `all`):
