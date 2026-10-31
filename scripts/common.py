@@ -156,6 +156,15 @@ def open_mmcif(path: str | Path):
     return path.open("r", encoding="utf-8", errors="ignore")
 
 
+def gzip_looks_valid(path: Path) -> bool:
+    """Cheap check for files already on disk: non-trivial size and gzip magic bytes."""
+    try:
+        with path.open("rb") as fh:
+            return path.stat().st_size > 20 and fh.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
 def gzip_is_valid(path: Path) -> bool:
     try:
         with gzip.open(path, "rb") as fh:
@@ -203,14 +212,16 @@ def make_session(pool_size: int, user_agent: str = "BeastAffinity-pipeline/1.0")
 
 
 def download_file(session: requests.Session, url: str, dest: Path, validator, timeout=(10, 120),
-                  gzip_output: bool = False) -> str:
+                  gzip_output: bool = False, exists_check=None) -> str:
     """Download ``url`` to ``dest`` atomically (gzip-compressing it if
     ``gzip_output``).
 
     Returns "skip" (dest already valid), "ok", "missing" (HTTP 404) or an error
-    string starting with "error:". ``validator(path) -> bool`` checks content.
+    string starting with "error:". ``validator(path) -> bool`` checks a fresh
+    download; ``exists_check`` (default: validator) decides whether a file
+    already on disk can be kept.
     """
-    if dest.is_file() and validator(dest):
+    if dest.is_file() and (exists_check or validator)(dest):
         return "skip"
     ensure_parent(dest)
     tmp = dest.with_name(dest.name + ".part")
@@ -242,3 +253,21 @@ def download_file(session: requests.Session, url: str, dest: Path, validator, ti
     except requests.RequestException as exc:
         tmp.unlink(missing_ok=True)
         return f"error:{type(exc).__name__}: {exc}"
+
+
+def rcsb_entries(session: requests.Session, url: str, ids: List[str], fields: str,
+                 batch: int = 1000) -> List[Dict[str, Any]]:
+    """Query the RCSB Data API (GraphQL) for ``fields`` of many entries, in batches.
+    Results are not returned in input order: match them by ``rcsb_id``."""
+    query = "query($ids: [String!]!) { entries(entry_ids: $ids) { rcsb_id %s } }" % fields
+    out: List[Dict[str, Any]] = []
+    for start in range(0, len(ids), batch):
+        r = session.post(url, json={"query": query, "variables": {"ids": ids[start:start + batch]}},
+                         timeout=(10, 300))
+        if r.status_code != 200:
+            raise SystemExit(f"RCSB GraphQL returned HTTP {r.status_code}; rerun this step to retry.")
+        payload = r.json()
+        if payload.get("errors"):
+            raise SystemExit(f"RCSB GraphQL error: {payload['errors'][:1]}")
+        out.extend(payload["data"]["entries"] or [])
+    return out

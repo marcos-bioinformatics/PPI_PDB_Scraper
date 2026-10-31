@@ -20,7 +20,7 @@ txts <- cfg$paths$ids
 # Lee tokens robustamente (separadores: espacios, comas, tabs, saltos)
 read_ids <- function(f) {
   x <- readLines(f, warn = FALSE)
-  x <- unlist(strsplit(x, "[,\\s]+"))
+  x <- unlist(strsplit(x, "[,[:space:]]+"))
   x <- tolower(trimws(x))
   x[nzchar(x)]
 }

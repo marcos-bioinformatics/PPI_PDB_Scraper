@@ -88,12 +88,10 @@ def main() -> None:
         chains[(pid, asm)].update((a, b))
         pairs[(pid, asm)].add((a, b))
 
-    asm_dir, asu_dir = Path(paths["assembly_dir"]), Path(paths["asu_dir"])
+    asm_dir = Path(paths["assembly_dir"])
     tasks = []
     for (pid, asm), chain_ids in sorted(chains.items()):
         path = asm_dir / pisa_subdir(pid) / f"{pid}-assembly{asm}.cif.gz"
-        if not path.is_file() and asm == 1:  # assembly 1 can fall back to the ASU
-            path = asu_dir / pisa_subdir(pid) / f"{pid}.cif.gz"
         tasks.append({"pdb_id": pid, "assembly_id": asm, "path": str(path), "chains": sorted(chain_ids),
                       "pairs": sorted(pairs[(pid, asm)]), "allowed": allowed, "cutoff": float(contacts["cutoff"])})
     log.info("Checking %d structures for %d rows", len(tasks), len(df))

@@ -12,7 +12,7 @@ changed is how the steps are wired together, plus a few bug fixes.
 | `01_download_pisa.py` | new (the PISA JSON came from a manual bulk download of the PDBe FTP) |
 | `02_parse_pisa.py` | `2_Json_scrapping.py` |
 | `03_select_assemblies.R` | `master_pisa_out/master_pisa.R` |
-| `04_download_structures.py` | `1_ASU_CIF_download.py` + `download_missing_assemblies.sh` (assembly 1 had no script) |
+| `04_download_structures.py` | `download_missing_assemblies.sh` (assembly 1 had no script); `1_ASU_CIF_download.py` replaced by the RCSB Data API |
 | `05_audit_downloads.py` | `0_audit_db_folders.py` |
 | `06_enrich_mmcif.py` | `3_CIF_scrapping_ASU_Assembly.py` |
 | `07_quality_filter.R` | `mmcif_enrichment_out/masterr_csv_164k.R` |
@@ -33,9 +33,11 @@ changed is how the steps are wired together, plus a few bug fixes.
   intermediate files between scripts.
 - **The ID list is applied first.** PISA data is downloaded only for the listed
   entries, instead of parsing the whole PDB and filtering afterwards.
-- **Structures are downloaded on demand.** Only the ASU and assembly files of
-  the pairs that survive the PISA parsing are fetched (in Seq8: 164,000 ASU +
-  190,214 assemblies downloaded, 69,577 entries / 93,022 assemblies needed).
+- **Structures are downloaded on demand.** Only the assembly files of the pairs
+  that survive the PISA parsing are fetched (in Seq8: 190,214 assemblies
+  downloaded, 93,022 needed). The asymmetric-unit files were only used for five
+  entry fields (method, resolution, R-free, title, keywords); these now come
+  from the RCSB Data API, which saves ~70,000 downloads (~20 GB).
 - **Compressed storage.** mmCIF files are kept as `.cif.gz` and PISA JSON as
   `.json.gz` (about 10x smaller).
 
@@ -63,18 +65,23 @@ changed is how the steps are wired together, plus a few bug fixes.
 2. **Coverage of selenomethionine (step 06).** Only `ATOM` records were counted
    as resolved, so MSE (written as `HETATM`) lowered the coverage of SeMet
    structures. All polymer residues are now counted.
-3. **ASU download (step 04).** RCSB now serves files with gzip transfer
-   encoding and the compressed `Content-Length`; the old downloader compared it
-   with the decompressed size, deleted every file and, on a rerun, deleted the
-   files already on disk. Downloads now request the raw bytes and are checked
-   by gzip integrity.
-4. **PISA pre-filter (step 02).** Interfaces with a missing area or p-value
+3. **ASU download.** RCSB now serves files with gzip transfer encoding and the
+   compressed `Content-Length`; the old downloader compared it with the
+   decompressed size, deleted every file and, on a rerun, deleted the files
+   already on disk. Downloads now request the raw bytes and are checked by gzip
+   integrity (and ASU files are no longer needed).
+4. **ID splitting (step 03).** `strsplit(x, "[,\\s]+")` splits on the letter
+   "s" (inside brackets `\s` is not whitespace for R's default regex engine).
+   It was harmless with the upper-case RCSB exports used for Seq8, but dropped
+   every ID containing an "s" (~9 %) once IDs are lower-case; now
+   `[,[:space:]]+`, and step 05 reports any entry lost in step 03.
+5. **PISA pre-filter (step 02).** Interfaces with a missing area or p-value
    passed the filter; they are now dropped.
-5. **Missing chains (step 06).** A missing sequence (pandas NaN) was counted as
+6. **Missing chains (step 06).** A missing sequence (pandas NaN) was counted as
    present in `has_chain*_asm`.
-6. **Test set (step 11).** `setorder()` referred to `.easy_score` instead of
+7. **Test set (step 11).** `setorder()` referred to `.easy_score` instead of
    `easy_score`, so the saved script stopped with an error.
-7. Row order is now deterministic in every Python step.
+8. Row order is now deterministic in every Python step.
 
 ## R scripts
 

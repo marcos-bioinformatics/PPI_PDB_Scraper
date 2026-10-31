@@ -94,8 +94,9 @@ rule download_structures:
         P["needed_pairs"],
     output:
         P["structures_manifest"],
+        P["entry_metadata"],
     params:
-        section("structures"),
+        section("rcsb"),
     log:
         f"{LOGS}/04_download_structures.log",
     shell:
@@ -109,6 +110,7 @@ rule audit_downloads:
         P["master_pisa"],
         P["needed_pairs"],
         P["structures_manifest"],
+        P["entry_metadata"],
     output:
         P["audit"],
     log:
@@ -121,10 +123,10 @@ rule enrich_mmcif:
     input:
         P["master_selected"],
         P["structures_manifest"],
+        P["entry_metadata"],
         P["audit"],
     output:
         P["enriched"],
-        P["entry_metadata"],
         P["chain_metadata"],
     params:
         section("enrichment"),

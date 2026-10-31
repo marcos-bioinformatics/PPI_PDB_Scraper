@@ -35,15 +35,11 @@ import requests
 from tqdm import tqdm
 
 from common import (atomic_write_text, download_file, ensure_parent, get_logger, json_is_valid,
-                    make_session, parse_args, pisa_subdir, read_id_lists)
+                    make_session, parse_args, pisa_subdir, rcsb_entries, read_id_lists)
 
 # Apache index rows: <a href="1abc_assembly1_interfaces.json">...</a> 2024-09-23 12:09
 LISTING_RE = re.compile(
     r'href="([0-9a-z]{4})_assembly(\d+)(_interfaces)?\.json".*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2})')
-
-GRAPHQL_QUERY = """query($ids: [String!]!) {
-  entries(entry_ids: $ids) { rcsb_id rcsb_entry_container_identifiers { assembly_ids } }
-}"""
 
 log = get_logger("01_download_pisa")
 
@@ -64,20 +60,12 @@ def fetch_listing(session, base_url: str, subdir: str):
     return subdir, found, None
 
 
-def current_assemblies(session, url: str, ids: List[str], batch: int = 1000) -> Dict[str, Set[int]]:
+def current_assemblies(session, url: str, ids: List[str]) -> Dict[str, Set[int]]:
     """Current assembly IDs of each entry according to the RCSB Data API."""
     out: Dict[str, Set[int]] = {}
-    for start in tqdm(range(0, len(ids), batch), desc="RCSB assemblies", unit="batch"):
-        chunk = ids[start:start + batch]
-        r = session.post(url, json={"query": GRAPHQL_QUERY, "variables": {"ids": chunk}}, timeout=(10, 300))
-        if r.status_code != 200:
-            raise SystemExit(f"RCSB GraphQL returned HTTP {r.status_code}; rerun this step to retry.")
-        payload = r.json()
-        if payload.get("errors"):
-            raise SystemExit(f"RCSB GraphQL error: {payload['errors'][:1]}")
-        for entry in payload["data"]["entries"] or []:
-            asm_ids = (entry.get("rcsb_entry_container_identifiers") or {}).get("assembly_ids") or []
-            out[entry["rcsb_id"].lower()] = {int(a) for a in asm_ids if str(a).isdigit()}
+    for entry in rcsb_entries(session, url, ids, "rcsb_entry_container_identifiers { assembly_ids }"):
+        asm_ids = (entry.get("rcsb_entry_container_identifiers") or {}).get("assembly_ids") or []
+        out[entry["rcsb_id"].lower()] = {int(a) for a in asm_ids if str(a).isdigit()}
     return out
 
 
@@ -120,7 +108,7 @@ def main() -> None:
     # 2) Optionally skip assemblies that no longer exist in the current entry
     current: Optional[Dict[str, Set[int]]] = None
     if pisa.get("only_current_assemblies", True):
-        current = current_assemblies(session, pisa["rcsb_graphql_url"], sorted({p for p, _ in available}))
+        current = current_assemblies(session, cfg["rcsb"]["graphql_url"], sorted({p for p, _ in available}))
 
     def is_current(pid: str, asm: int) -> bool:
         return current is None or asm in current.get(pid, set())

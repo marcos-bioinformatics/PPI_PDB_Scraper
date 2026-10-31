@@ -24,16 +24,16 @@ pisa:
   # PDBe can keep files of assemblies removed in later revisions of an entry;
   # if true, only the assemblies the entry has today (RCSB Data API) are used.
   only_current_assemblies: true
-  rcsb_graphql_url: https://data.rcsb.org/graphql
   # Pre-filter of step 02: a protein-protein interface becomes a candidate pair
   # only if it passes both thresholds. They also decide which structures are
   # downloaded, so the final thresholds (step 07) can only be stricter.
   min_interface_area: 800      # interface_area >= this (A^2 buried per side)
   max_p_value: 0.5             # PISA Delta-iG P-value <= this (<0.5: more hydrophobic than random)
 
-# --- 04 Structures (RCSB) ----------------------------------------------------
-structures:
-  base_url: https://files.rcsb.org/download   # {id}.cif.gz, {id}-assembly{n}.cif.gz
+# --- 01, 04 RCSB ---------------------------------------------------------------
+rcsb:
+  download_url: https://files.rcsb.org/download   # {id}-assembly{n}.cif.gz
+  graphql_url: https://data.rcsb.org/graphql      # current assemblies (01), entry metadata (04)
 
 # --- 06 mmCIF enrichment -----------------------------------------------------
 enrichment:
@@ -125,11 +125,10 @@ paths:
   master_pisa: "{data_dir}/interim/02_master_pisa.csv"
   master_selected: "{data_dir}/interim/03_master_pisa_selected.csv"
   needed_pairs: "{data_dir}/interim/03_needed_pairs.csv"
-  asu_dir: "{data_dir}/raw/asu"
   assembly_dir: "{data_dir}/raw/assemblies"
   structures_manifest: "{data_dir}/raw/structures_manifest.tsv"
   audit: "{data_dir}/reports/05_audit_downloads.json"
-  entry_metadata: "{data_dir}/interim/06_entry_metadata.csv"
+  entry_metadata: "{data_dir}/interim/04_entry_metadata.csv"
   chain_metadata: "{data_dir}/interim/06_chain_metadata.csv"
   enriched: "{data_dir}/interim/06_enriched.csv"
   quality_filtered: "{data_dir}/interim/07_quality_filtered.csv"

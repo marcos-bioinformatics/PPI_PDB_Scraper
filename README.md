@@ -8,7 +8,8 @@ Starting from any set of IDs exported from the RCSB Advanced Search, it:
 
 1. downloads the PISA interface analysis of every entry from PDBe,
 2. keeps protein–protein interfaces as candidate chain pairs,
-3. downloads only the mmCIF files those pairs need (asymmetric unit + biological assemblies),
+3. downloads only the biological-assembly mmCIF files those pairs need, plus their
+   entry metadata (method, resolution, R-free) from the RCSB Data API,
 4. adds sequence, coverage and experimental-quality metadata to every pair,
 5. filters by quality, removes chains with non-standard residues and checks
    that every PISA interface has real atomic contacts,
@@ -26,7 +27,7 @@ clustering); R steps take the data-analysis decisions (filters, pruning, splits)
 | 01 | `01_download_pisa.py` | Reads the ID lists; downloads PISA JSON from PDBe | `raw/pisa/` |
 | 02 | `02_parse_pisa.py` | One row per protein pair in each PISA interface | `02_master_pisa.csv` |
 | 03 | `03_select_assemblies.R` | Restricts to the ID list; lists the assemblies needed | `03_needed_pairs.csv` |
-| 04 | `04_download_structures.py` | Downloads the needed ASU and assembly mmCIF files | `raw/asu/`, `raw/assemblies/` |
+| 04 | `04_download_structures.py` | Downloads the needed assembly mmCIF files; entry metadata from the RCSB Data API | `raw/assemblies/`, `04_entry_metadata.csv` |
 | 05 | `05_audit_downloads.py` | Checks that every needed file is on disk | `05_audit_downloads.json` |
 | 06 | `06_enrich_mmcif.py` | Sequences, coverage, homo/hetero, method, resolution, R-free | `06_enriched.csv` |
 | 07 | `07_quality_filter.R` | Exploratory analysis + quality filter + gold/silver tier | `07_quality_filtered.csv` |
@@ -88,7 +89,7 @@ or `Rscript scripts/07_quality_filter.R config/config.yaml`.
 ### Quick test
 
 `config/test.yaml` runs the whole pipeline on the 1,500 IDs in `tests/pdb_ids/`
-(about 0.7 GB of downloads, ~6 minutes) into `data_test/`:
+(about 0.5 GB of downloads, ~6 minutes) into `data_test/`:
 
 ```bash
 snakemake --cores 8 --config cfg=config/test.yaml
@@ -159,19 +160,20 @@ All files are written under `data/` (configurable with `data_dir`):
 
 ```
 data/
-├── raw/         PISA JSON (gzipped) and mmCIF files, with download manifests
+├── raw/         PISA JSON and assembly mmCIF files (gzipped), with download manifests
 ├── interim/     tables of steps 01–11
 ├── processed/   test.csv, trainval_splits.csv, validation.csv, hard_negatives.csv
 ├── reports/     audits, parse errors, quality-filter plots
 └── logs/        one log per step
 ```
 
-Disk space: about 25 KB of PISA JSON per assembly and 0.3 MB per mmCIF file,
-i.e. ~0.7 GB for the 1,500-ID test and roughly 50 GB for a list of ~160,000 IDs.
+Disk space: about 25 KB of PISA JSON and 0.27 MB of mmCIF per assembly, i.e.
+~0.5 GB for the 1,500-ID test and roughly 30 GB for a list of ~160,000 IDs.
 
 ## Data sources
 
-- **RCSB PDB** — mmCIF files (`files.rcsb.org`) and the Advanced Search.
+- **RCSB PDB** — assembly mmCIF files (`files.rcsb.org`), the Data API
+  (`data.rcsb.org`, current assemblies and entry metadata) and the Advanced Search.
   Burley et al., *Nucleic Acids Res.* (2023).
 - **PDBe PISA** — interface and assembly analysis
   (`ftp.ebi.ac.uk/pub/databases/msd/pdb-assemblies-analysis`).

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Step 06 - Enrich every candidate pair with mmCIF data (entry + chain level).
 
-Input : paths.master_selected (step 03), mmCIF files from step 04
+Input : paths.master_selected (step 03), assembly mmCIF files and
+        paths.entry_metadata (step 04)
 Output: paths.enriched         master rows + sequence, coverage, homo/hetero and entry metadata
-        paths.entry_metadata   one row per entry (ASU file: method, resolution, R-free, title)
         paths.chain_metadata   one row per protein chain of every needed assembly
 
 Chains are matched by auth_asym_id: PISA's chain_id is the author chain ID of
@@ -24,7 +24,6 @@ Parsed files are cached per chunk in a parts/ folder so an interrupted run resum
 from __future__ import annotations
 
 import hashlib
-import io
 import re
 import shutil
 from collections import defaultdict
@@ -52,48 +51,6 @@ def as_list(value: Any) -> List[str]:
     if value is None:
         return []
     return [str(v) for v in value] if isinstance(value, list) else [str(value)]
-
-
-def first_str(mm: Dict[str, Any], key: str) -> Optional[str]:
-    values = as_list(mm.get(key))
-    return values[0] if values and values[0] not in (".", "?") else None
-
-
-def first_float(mm: Dict[str, Any], key: str) -> Optional[float]:
-    value = first_str(mm, key)
-    try:
-        return float(value) if value is not None else None
-    except ValueError:
-        return None
-
-
-def read_header(path: str) -> Dict[str, Any]:
-    """Parse only the categories before _atom_site (entry-level metadata)."""
-    lines: List[str] = []
-    with open_mmcif(path) as fh:
-        for line in fh:
-            if line.startswith("_atom_site."):
-                if lines and lines[-1].strip() == "loop_":
-                    lines.pop()
-                break
-            lines.append(line)
-    return MMCIF2Dict(io.StringIO("".join(lines)))
-
-
-def parse_entry(task: Tuple[str, str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    pdb_id, path = task
-    try:
-        mm = read_header(path)
-        return {
-            "pdb_id": pdb_id,
-            "exptl_method": first_str(mm, "_exptl.method"),
-            "resolution": first_float(mm, "_refine.ls_d_res_high"),
-            "r_free": first_float(mm, "_refine.ls_R_factor_R_free"),
-            "title": first_str(mm, "_struct.title"),
-            "keywords": first_str(mm, "_struct_keywords.pdbx_keywords"),
-        }, None
-    except Exception as exc:  # malformed files are reported, never fatal
-        return None, f"{pdb_id}\tasu\t{path}\t{type(exc).__name__}: {exc}"
 
 
 def parse_assembly(task: Tuple[str, int, str, bool]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
@@ -211,23 +168,17 @@ def main() -> None:
     master["assembly_id"] = master["assembly_id"].astype(int)
     log.info("%d candidate pairs from %d entries", len(master), master["pdb_id"].nunique())
 
-    asu_dir, asm_dir = Path(paths["asu_dir"]), Path(paths["assembly_dir"])
-    entries = sorted(master["pdb_id"].unique())
+    asm_dir = Path(paths["assembly_dir"])
     pairs = sorted(set(zip(master["pdb_id"], master["assembly_id"])))
-    entry_tasks = [(p, str(asu_dir / pisa_subdir(p) / f"{p}.cif.gz")) for p in entries]
     asm_tasks = [(p, a, str(asm_dir / pisa_subdir(p) / f"{p}-assembly{a}.cif.gz"), bool(enr["ignore_hydrogens"]))
                  for p, a in pairs]
-    entry_tasks = [t for t in entry_tasks if Path(t[1]).is_file()]
     asm_tasks = [t for t in asm_tasks if Path(t[2]).is_file()]
-    log.info("Files on disk: %d/%d ASU, %d/%d assemblies",
-             len(entry_tasks), len(entries), len(asm_tasks), len(pairs))
+    log.info("Assembly files on disk: %d/%d", len(asm_tasks), len(pairs))
 
-    entry_df, err1 = run_cached("asu", parse_entry, entry_tasks, parts_dir, workers, flatten=False)
-    chain_df, err2 = run_cached("assembly", parse_assembly, asm_tasks, parts_dir, workers, flatten=True)
+    entry_df = pd.read_csv(paths["entry_metadata"], keep_default_na=False, na_values=[""], dtype={"pdb_id": str})
+    chain_df, errors = run_cached("assembly", parse_assembly, asm_tasks, parts_dir, workers, flatten=True)
     errors_path = Path(paths["reports_dir"]) / "06_mmcif_parse_errors.tsv"
-    ensure_parent(errors_path).write_text("".join(e + "\n" for e in err1 + err2), encoding="utf-8")
-
-    entry_df.to_csv(ensure_parent(paths["entry_metadata"]), index=False)
+    ensure_parent(errors_path).write_text("".join(e + "\n" for e in errors), encoding="utf-8")
     chain_df.to_csv(ensure_parent(paths["chain_metadata"]), index=False)
 
     # --- merge: chain data for A and B, then entry metadata ------------------

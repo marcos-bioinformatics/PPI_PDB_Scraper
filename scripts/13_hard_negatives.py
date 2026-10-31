@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step 13 - Hard negatives: chains of the same assembly that are not in contact.
 
-Input : paths.chain_metadata, paths.entry_metadata (06), PISA JSON (01),
+Input : paths.chain_metadata (06), paths.entry_metadata (04), PISA JSON (01),
         paths.clustered (09), paths.test (11), paths.trainval_splits (12)
 Output: paths.hard_negatives                 one row per negative pair, with its split
         reports_dir/13_hard_negatives.json   candidates left after each filter
