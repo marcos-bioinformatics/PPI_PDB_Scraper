@@ -233,16 +233,19 @@ df_filt <- df2 %>%
     solvation_density = solvation_energy / interface_area
   ) %>%
   filter(
-    molA_coverage > qf$min_coverage,
-    molB_coverage > qf$min_coverage,
+    # coverage_metric: "coverage" (resolved / SEQRES) o "internal_coverage"
+    .data[[paste0("molA_", qf$coverage_metric)]] > qf$min_coverage,
+    .data[[paste0("molB_", qf$coverage_metric)]] > qf$min_coverage,
     r_free < qf$max_r_free,
+    # filtros opcionales: null en el config = desactivado
+    if (is.null(qf$max_resolution)) TRUE else resolution <= qf$max_resolution,
     p_value <= qf$max_p_value,
     exptl_method == qf$exptl_method,
     molA_seq_len > qf$min_chain_length, molA_seq_len <= qf$max_chain_length,
     molB_seq_len > qf$min_chain_length, molB_seq_len <= qf$max_chain_length,
     interface_area > qf$min_interface_area,
     interface_area <= qf$max_interface_area,
-    solvation_density < qf$max_solvation_density
+    if (is.null(qf$max_solvation_density)) TRUE else solvation_density < qf$max_solvation_density
   )
 
 df_filt <- df_filt %>%

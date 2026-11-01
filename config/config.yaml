@@ -41,16 +41,22 @@ enrichment:
   ignore_hydrogens: true
 
 # --- 07 Quality filter (R) ---------------------------------------------------
+# Also applied to the hard negatives (step 13), except the interface thresholds.
+# Optional filters are disabled with null.
 quality_filter:
-  exptl_method: "X-RAY DIFFRACTION"
-  min_coverage: 0.86           # both chains: coverage > this
+  exptl_method: "X-RAY DIFFRACTION"   # crystal structures only (cryo-EM has no R-free)
   max_r_free: 0.28             # r_free < this
-  max_p_value: 0.4             # p_value <= this
+  max_resolution: null         # resolution <= this (A); null = no cut (e.g. if the RCSB query already limits it)
+  coverage_metric: coverage    # "coverage" (resolved / SEQRES) or "internal_coverage"
+                               # (resolved / span between first and last resolved residue,
+                               # i.e. disordered tags and tails do not count)
+  min_coverage: 0.86           # both chains: coverage metric > this
   min_chain_length: 12         # both chains: length > this
   max_chain_length: 600        # both chains: length <= this
+  max_p_value: 0.4             # p_value <= this
   min_interface_area: 800      # interface_area > this
   max_interface_area: 5400     # interface_area <= this
-  max_solvation_density: -0.0068   # solvation_energy / interface_area < this
+  max_solvation_density: null  # solvation_energy / interface_area < this (Seq8 used -0.0068)
   gold_max_p_value: 0.2        # tier "gold" if p_value < this, else "silver"
 
 # --- 08 Structure checks -----------------------------------------------------

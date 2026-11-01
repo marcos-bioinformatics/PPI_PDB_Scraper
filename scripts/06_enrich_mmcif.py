@@ -10,14 +10,21 @@ Chains are matched by auth_asym_id: PISA's chain_id is the author chain ID of
 the assembly file, including symmetry copies such as "A-2".
 
 Per chain (assembly file, first model):
-  seq              canonical sequence of its entity (_entity_poly)
-  seqres_count     residues in _pdbx_poly_seq_scheme
-  resolved_count   polymer residues with at least one non-hydrogen atom
-                   (ATOM or HETATM, so MSE counts as resolved)
-  coverage         resolved_count / seqres_count
+  seq                canonical sequence of its entity (_entity_poly)
+  seqres_count       residues in _pdbx_poly_seq_scheme
+  resolved_count     polymer residues with at least one non-hydrogen atom
+                     (ATOM or HETATM, so MSE counts as resolved)
+  coverage           resolved_count / seqres_count
+  internal_coverage  resolved_count / residues between the first and last
+                     resolved ones (ignores disordered tags and tails)
+  missing_nterm/_cterm  unresolved residues before the first / after the last
+                     resolved residue
 
-is_homo = same entity OR positional sequence identity >= enrichment.homo_similarity.
-Rows without entry metadata or without both chain sequences are dropped.
+seq_identity: identical residues of a global alignment with free end gaps
+(BLOSUM62) divided by the length of the shorter chain, so a truncated construct
+of the same protein scores 1. is_homo = same entity OR seq_identity >=
+enrichment.homo_similarity. Rows without entry metadata or without both chain
+sequences are dropped.
 Parsed files are cached per chunk in a parts/ folder so an interrupted run resumes.
 """
 
@@ -32,6 +39,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+from Bio import Align
+from Bio.Align import substitution_matrices
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from tqdm import tqdm
 
@@ -40,8 +49,10 @@ from common import ensure_parent, get_logger, open_mmcif, parse_args, pisa_subdi
 log = get_logger("06_enrich_mmcif")
 
 CHUNK = 500
+CACHE_VERSION = 2  # bump when parse_assembly() output changes
 CHAIN_FIELDS = ["entity_id", "seq", "seq_len", "seqres_count_chain", "resolved_count",
-                "missing_residues", "coverage", "coverage_pct"]
+                "missing_residues", "coverage", "coverage_pct",
+                "internal_coverage", "missing_nterm", "missing_cterm"]
 
 
 # -----------------------------------------------------------------------------
@@ -72,7 +83,7 @@ def parse_assembly(task: Tuple[str, int, str, bool]) -> Tuple[List[Dict[str, Any
         for chain, ent, seq_id in zip(as_list(mm.get("_pdbx_poly_seq_scheme.pdb_strand_id")),
                                       as_list(mm.get("_pdbx_poly_seq_scheme.entity_id")),
                                       as_list(mm.get("_pdbx_poly_seq_scheme.seq_id"))):
-            seqres[chain].add(seq_id)
+            seqres[chain].add(int(seq_id))
             entity_of.setdefault(chain, ent)
 
         models = as_list(mm.get("_atom_site.pdbx_PDB_model_num"))
@@ -85,7 +96,7 @@ def parse_assembly(task: Tuple[str, int, str, bool]) -> Tuple[List[Dict[str, Any
                 continue
             if models and models[i] != first_model:
                 continue
-            resolved[chain].add(seq_id)
+            resolved[chain].add(int(seq_id))
 
         rows = []
         for chain, ent in entity_of.items():
@@ -93,16 +104,22 @@ def parse_assembly(task: Tuple[str, int, str, bool]) -> Tuple[List[Dict[str, Any
             if seq is None:
                 continue
             n_seqres = len(seqres[chain]) or len(seq)
-            n_res = len(resolved[chain]) if chain in resolved else None
-            coverage = n_res / n_seqres if (n_res is not None and n_seqres) else None
-            rows.append({
-                "pdb_id": pdb_id, "assembly_id": assembly_id, "chain_id": chain,
-                "entity_id": ent, "seq": seq, "seq_len": len(seq),
-                "seqres_count_chain": n_seqres, "resolved_count": n_res,
-                "missing_residues": max(0, n_seqres - n_res) if n_res is not None else None,
-                "coverage": coverage,
-                "coverage_pct": 100.0 * coverage if coverage is not None else None,
-            })
+            row = {"pdb_id": pdb_id, "assembly_id": assembly_id, "chain_id": chain,
+                   "entity_id": ent, "seq": seq, "seq_len": len(seq), "seqres_count_chain": n_seqres}
+            if resolved.get(chain):
+                obs = resolved[chain]
+                lo, hi = min(obs), max(obs)
+                coverage = len(obs) / n_seqres
+                row.update({
+                    "resolved_count": len(obs),
+                    "missing_residues": max(0, n_seqres - len(obs)),
+                    "coverage": coverage,
+                    "coverage_pct": 100.0 * coverage,
+                    "internal_coverage": len(obs) / sum(1 for s in seqres[chain] if lo <= s <= hi),
+                    "missing_nterm": sum(1 for s in seqres[chain] if s < lo),
+                    "missing_cterm": sum(1 for s in seqres[chain] if s > hi),
+                })
+            rows.append(row)
         return rows, None
     except Exception as exc:  # malformed files are reported, never fatal
         return [], f"{pdb_id}\tassembly{assembly_id}\t{path}\t{type(exc).__name__}: {exc}"
@@ -111,8 +128,7 @@ def parse_assembly(task: Tuple[str, int, str, bool]) -> Tuple[List[Dict[str, Any
 # -----------------------------------------------------------------------------
 # Chunked, resumable execution
 # -----------------------------------------------------------------------------
-def run_cached(name: str, func, tasks: List[tuple], parts_dir: Path, workers: int,
-               flatten: bool) -> Tuple[pd.DataFrame, List[str]]:
+def run_cached(name: str, func, tasks: List[tuple], parts_dir: Path, workers: int) -> Tuple[pd.DataFrame, List[str]]:
     """Run ``func`` over ``tasks`` in chunks; each finished chunk is saved to
     parts_dir and reused if the same chunk is requested again."""
     frames, errors = [], []
@@ -120,7 +136,7 @@ def run_cached(name: str, func, tasks: List[tuple], parts_dir: Path, workers: in
             tqdm(total=len(tasks), desc=name, unit="file") as pbar:
         for start in range(0, len(tasks), CHUNK):
             chunk = tasks[start:start + CHUNK]
-            key = hashlib.sha1(repr(chunk).encode()).hexdigest()[:16]
+            key = hashlib.sha1(repr((CACHE_VERSION, chunk)).encode()).hexdigest()[:16]
             part = parts_dir / f"{name}_{key}.pkl"
             err_part = parts_dir / f"{name}_{key}.err"
             if part.is_file():
@@ -131,10 +147,8 @@ def run_cached(name: str, func, tasks: List[tuple], parts_dir: Path, workers: in
                 for result, err in ex.map(func, chunk, chunksize=10):
                     if err:
                         chunk_errors.append(err)
-                    elif flatten:
+                    else:
                         records.extend(result)
-                    elif result is not None:
-                        records.append(result)
                 frame = pd.DataFrame.from_records(records)
                 tmp = part.with_suffix(".tmp")
                 frame.to_pickle(tmp)
@@ -147,12 +161,20 @@ def run_cached(name: str, func, tasks: List[tuple], parts_dir: Path, workers: in
     return (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()), errors
 
 
-def positional_identity(a: Any, b: Any) -> Optional[float]:
-    """Matches over the shared prefix divided by the longer length (no alignment)."""
-    if not isinstance(a, str) or not isinstance(b, str) or not a or not b:
-        return None
-    matches = sum(x == y for x, y in zip(a, b))
-    return matches / max(len(a), len(b))
+_ALIGNER = None
+
+
+def aligned_identity(pair: Tuple[str, str]) -> float:
+    """Identical residues of a global alignment with free end gaps (BLOSUM62,
+    gap open -10 / extend -0.5) divided by the length of the shorter sequence."""
+    global _ALIGNER
+    if _ALIGNER is None:
+        _ALIGNER = Align.PairwiseAligner(mode="global", open_gap_score=-10, extend_gap_score=-0.5,
+                                         end_gap_score=0, substitution_matrix=substitution_matrices.load("BLOSUM62"))
+    a, b = pair
+    aln = _ALIGNER.align(a, b)[0]
+    matches = sum(1 for x, y in zip(aln[0], aln[1]) if x == y and x != "-")
+    return matches / min(len(a), len(b))
 
 
 def main() -> None:
@@ -176,7 +198,7 @@ def main() -> None:
     log.info("Assembly files on disk: %d/%d", len(asm_tasks), len(pairs))
 
     entry_df = pd.read_csv(paths["entry_metadata"], keep_default_na=False, na_values=[""], dtype={"pdb_id": str})
-    chain_df, errors = run_cached("assembly", parse_assembly, asm_tasks, parts_dir, workers, flatten=True)
+    chain_df, errors = run_cached("assembly", parse_assembly, asm_tasks, parts_dir, workers)
     errors_path = Path(paths["reports_dir"]) / "06_mmcif_parse_errors.tsv"
     ensure_parent(errors_path).write_text("".join(e + "\n" for e in errors), encoding="utf-8")
     chain_df.to_csv(ensure_parent(paths["chain_metadata"]), index=False)
@@ -191,11 +213,17 @@ def main() -> None:
         out = out.merge(side_df, on=keys + [f"{side}_chain_id"], how="left", validate="many_to_one")
     out = out.merge(entry_df, on="pdb_id", how="left", validate="many_to_one")
 
-    sim = [positional_identity(a, b) for a, b in zip(out["molA_seq"], out["molB_seq"])]
-    out["seq_similarity_simple"] = sim
     out["is_homo_entity"] = (out["molA_entity_id_mmcif"].notna()
                              & (out["molA_entity_id_mmcif"] == out["molB_entity_id_mmcif"]))
-    out["is_homo_80"] = [s is not None and s >= float(enr["homo_similarity"]) for s in sim]
+    # same entity -> identical sequences; align only the pairs of different entities
+    to_align = sorted({(a, b) for a, b, same in zip(out["molA_seq"], out["molB_seq"], out["is_homo_entity"])
+                       if not same and isinstance(a, str) and isinstance(b, str)})
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        identity = dict(zip(to_align, tqdm(ex.map(aligned_identity, to_align, chunksize=50),
+                                           total=len(to_align), desc="Align", unit="pair")))
+    out["seq_identity"] = [1.0 if same else identity.get((a, b))
+                           for a, b, same in zip(out["molA_seq"], out["molB_seq"], out["is_homo_entity"])]
+    out["is_homo_80"] = out["seq_identity"].fillna(0) >= float(enr["homo_similarity"])
     out["is_homo"] = out["is_homo_entity"] | out["is_homo_80"]
     out["has_entry_meta"] = out["exptl_method"].notna()
     out["has_chainA_asm"] = out["molA_seq"].notna()

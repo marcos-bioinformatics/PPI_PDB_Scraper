@@ -51,10 +51,13 @@ def special_residues(chain, allowed: Iterable[str]) -> Tuple[Counter, Counter]:
 
 
 def heavy_atoms(chain) -> Tuple[np.ndarray, np.ndarray]:
-    """Coordinates (n, 3) of the non-hydrogen atoms of a chain and the index of
-    the residue each atom belongs to."""
+    """Coordinates (n, 3) of the non-hydrogen atoms of the amino-acid residues of
+    a chain (modified ones such as MSE included; waters and ligands that share the
+    author chain ID excluded) and the index of the residue each atom belongs to."""
     coords, residue_idx = [], []
     for i, res in enumerate(chain.get_residues()):
+        if not is_aa(res, standard=False):
+            continue
         for atom in res.get_atoms():
             if atom.element not in ("H", "D"):
                 coords.append(atom.coord)

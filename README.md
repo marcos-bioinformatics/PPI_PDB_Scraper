@@ -115,14 +115,29 @@ today are used (`only_current_assemblies`): the PDBe dump can keep assemblies
 removed in later revisions.
 
 **Quality filter (`quality_filter`, step 07).** Experimental method, R-free,
-minimum coverage of both chains (resolved / SEQRES residues), chain length
-range, interface area range, P-value and solvation density
-(`solvation_energy / interface_area`, nearly independent of interface size).
-`max_chain_length` is often limited by the model you plan to train.
+optional maximum resolution, minimum coverage of both chains, chain length
+range, interface area range and P-value. Method and resolution are often
+already restricted by the RCSB query (the Seq8 dataset used X-ray structures
+up to 3.0 Å); cryo-EM entries are excluded by design because they have no
+R-free. `coverage_metric` chooses between `coverage` (resolved / SEQRES
+residues) and `internal_coverage` (resolved residues between the first and the
+last resolved one): with the latter, disordered expression tags and tails are
+not penalised, only internal gaps. An optional cut on solvation density
+(`solvation_energy / interface_area`) is available but disabled by default.
+`max_chain_length` is often limited by the model you plan to train. Homo/hetero
+pairs are defined by the same entity or a sequence identity of at least
+`enrichment.homo_similarity`, measured on a global alignment over the shorter
+chain, so a truncated construct of the same protein counts as homo.
 
 **Structure checks (`special_residues`, `contacts`, step 08).** Chains with
-non-standard amino acids other than the allowed ones are dropped. Every pair
-must also have at least `min_residue_contacts` residue pairs with heavy atoms
+non-standard amino acids other than the allowed ones are dropped. The default
+is conservative: only the selenium variants used for phasing (MSE, SEM, SEC)
+are allowed. In practice the excluded chains (about 1.5 %) carry cysteine
+modifications that are usually crystallisation artefacts (CAS, CSO, CSX, CME,
+CSS), catalytic or cofactor lysines (LLP, KCX), N-terminal modifications (PCA,
+FME) or post-translational modifications (SEP, TPO, PTR, ALY, TYS); add any of
+them to `allowed` if they are acceptable for your use. Every pair must also
+have at least `min_residue_contacts` residue pairs with amino-acid heavy atoms
 within `cutoff` Å; this catches PISA interfaces that cannot be mapped onto the
 structure.
 

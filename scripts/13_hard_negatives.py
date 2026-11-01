@@ -12,17 +12,18 @@ this order:
   1. hetero pairs only, unless hard_negatives.include_homo
   2. both chain sequences present in the clustered positives (step 09), so the
      negative shares the protein universe, cluster IDs and splits of the positives
-  3. entry and chain quality: the same method, R-free, coverage and length
-     thresholds as step 07 (interface thresholds do not apply)
+  3. entry and chain quality: the same method, R-free, resolution, coverage and
+     length thresholds as step 07 (interface thresholds do not apply)
   4. no conflict: the pair of chain clusters (hard_negatives.conflict_level) is
      not in contact in any downloaded assembly
   5. one negative per (entry, sequence pair)
   6. structure: no forbidden special residues and a minimum heavy-atom distance
      between the chains of hard_negatives.min_distance
   7. at most hard_negatives.max_per_entry per entry (random, seeded)
-Split: "test" if a chain is in the test set or in a cluster held out for the
-unseen-chain (C3) buckets; else "val" if a chain appears only in validation
-positives; else "train".
+Split: "test" if a chain appears only in test positives or belongs to a cluster
+held out for the unseen-chain (C3) buckets; else "val" if a chain appears only
+in validation positives; else "train". Proteins shared by train and test (as in
+the train-like C1 bucket) do not pull a negative into the test set.
 """
 
 from __future__ import annotations
@@ -134,14 +135,17 @@ def main() -> None:
     counts["after_known_proteins"] = len(cand)
 
     # --- 3) entry and chain quality (same thresholds as step 07)
-    cols = ["pdb_id", "assembly_id", "chain_id", "entity_id", "seq", "seq_len", "coverage", "coverage_pct"]
+    cols = ["pdb_id", "assembly_id", "chain_id", "entity_id", "seq", "seq_len", "coverage", "coverage_pct",
+            "internal_coverage", "missing_nterm", "missing_cterm"]
     for side in ("molA", "molB"):
         cand = cand.merge(chains[cols].rename(columns={c: f"{side}_{c}" for c in cols[2:]}),
                           on=["pdb_id", "assembly_id", f"{side}_chain_id"], how="left", validate="many_to_one")
     cand = cand.merge(entries, on="pdb_id", how="left", validate="many_to_one")
     ok = (cand["exptl_method"] == qf["exptl_method"]) & (cand["r_free"] < qf["max_r_free"])
+    if qf.get("max_resolution") is not None:
+        ok &= cand["resolution"] <= qf["max_resolution"]
     for side in ("molA", "molB"):
-        ok &= (cand[f"{side}_coverage"] > qf["min_coverage"])
+        ok &= (cand[f"{side}_{qf['coverage_metric']}"] > qf["min_coverage"])
         ok &= (cand[f"{side}_seq_len"] > qf["min_chain_length"]) & (cand[f"{side}_seq_len"] <= qf["max_chain_length"])
     cand = cand[ok.fillna(False)]
     counts["after_quality"] = len(cand)
@@ -151,7 +155,7 @@ def main() -> None:
     cand = cand[[k not in touching for k in keys]]
     counts["after_conflicts"] = len(cand)
     cand = cand.assign(_pair=[tuple(sorted(x)) for x in zip(cand["uidA"], cand["uidB"])],
-                       _cov=cand[["molA_coverage", "molB_coverage"]].min(axis=1))
+                       _cov=cand[[f"molA_{qf['coverage_metric']}", f"molB_{qf['coverage_metric']}"]].min(axis=1))
     cand = (cand.sort_values(["pdb_id", "_cov", "assembly_id", "molA_chain_id", "molB_chain_id"],
                              ascending=[True, False, True, True, True])
                 .drop_duplicates(["pdb_id", "_pair"]))
@@ -200,16 +204,19 @@ def main() -> None:
         return set(df["molA_seq"].map(seq_uid)) | set(df["molB_seq"].map(seq_uid))
 
     test_uids, val_uids, train_uids = uids(test), uids(tv[tv[split_col] == "val"]), uids(tv[tv[split_col] == "train"])
-    held_out = {t: set() for t in ("c40", "c50")}
+    held_out = {t: set() for t in ("c40", "c50") if t in cluster_of}
     for t in held_out:
         c3 = test[test["test_subbucket"] == f"unseen_chain_{t}"]
         held_out[t] = {cluster_of[t].get(u) for u in uids(c3)} - {None}
 
+    test_only = test_uids - train_uids - val_uids
+    val_only = val_uids - train_uids - test_uids
+
     def assign(ua: str, ub: str) -> str:
-        if ua in test_uids or ub in test_uids or any(
+        if ua in test_only or ub in test_only or any(
                 cluster_of[t].get(u) in held_out[t] for t in held_out for u in (ua, ub)):
             return "test"
-        if any(u in val_uids and u not in train_uids for u in (ua, ub)):
+        if ua in val_only or ub in val_only:
             return "val"
         return "train"
 

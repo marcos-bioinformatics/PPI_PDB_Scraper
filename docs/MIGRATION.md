@@ -53,6 +53,19 @@ changed is how the steps are wired together, plus a few bug fixes.
   conflicts, requires a minimum distance and assigns each negative to the split
   of its proteins.
 
+## Defaults that differ from Seq8
+
+To reproduce Seq8 exactly, set these values in `config/config.yaml`:
+
+| Parameter | v1 default | Seq8 |
+|---|---|---|
+| `quality_filter.max_chain_length` | 600 | 900 (the saved script said 800) |
+| `quality_filter.max_solvation_density` | null (off) | -0.0068 |
+| `enrichment.homo_similarity` | on an alignment | positional identity, no alignment |
+
+`quality_filter.coverage_metric: internal_coverage` and `quality_filter.max_resolution`
+are new options, off by default.
+
 ## Bug fixes
 
 1. **Chain matching (step 06).** Chains were indexed by `label_asym_id` but PISA
