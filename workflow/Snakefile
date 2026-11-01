@@ -46,6 +46,7 @@ rule all:
         P["trainval_splits"],
         P["validation"],
         P["hard_negatives"] if C["hard_negatives"]["enabled"] else [],
+        P["leakage_audit"],
 
 
 rule download_pisa:
@@ -242,6 +243,21 @@ rule hard_negatives:
         f"{LOGS}/13_hard_negatives.log",
     shell:
         py("13_hard_negatives")
+
+
+rule leakage_audit:
+    input:
+        P["test"],
+        P["trainval_splits"],
+    output:
+        P["leakage_audit"],
+    params:
+        section("clustering"),
+    threads: C["threads"]
+    log:
+        f"{LOGS}/14_leakage_audit.log",
+    shell:
+        py("14_leakage_audit")
 
 
 # Optional exploratory analysis (not part of `all`):

@@ -602,31 +602,8 @@ res98 <- prune_pair_cluster_single_step_v3(
   K_var_heter = as.integer(pr$K_var_heter)
 )
 
-# B) Pruning más amplio en pair_cluster_95
-res95 <- prune_pair_cluster_single_step_v3(
-  df,
-  pair_key = "pair_cluster_95",
-  
-  # exact dedupe
-  exact_dedup_mode = "softcap",
-  exact_K_homo = 2L,
-  exact_K_heter = 4L,
-  
-  # pruning
-  activate_n = 12L,
-  area_range_pct_thr = 4.0,
-  
-  K_redund_homo = 2L,
-  K_redund_heter = 4L,
-  K_var_homo = 6L,
-  K_var_heter = 10L
-)
-
-
-
 # outputs
 res98$pruning_summary
-res95$pruning_summary
 
 res98$audits$profile
 res98$audits$homo
@@ -637,17 +614,40 @@ res98$audits$quality_summary
 res98$audits$top_pair_clusters_before
 res98$audits$top_pair_clusters_after
 
-res95$audits$profile
-res95$audits$homo
-res95$audits$pair_exact_repeats
-res95$audits$pair_clusters_multi
-res95$audits$chain_clusters_multi
-res95$audits$quality_summary
-res95$audits$top_pair_clusters_before
-res95$audits$top_pair_clusters_after
-
-df_after98 <- res98$df_after
-df_after95 <- res95$df_after
+# La columna auxiliar .area no forma parte de la salida
+df_after98 <- res98$df_after %>% select(-any_of(".area"))
 
 write.csv(df_after98, ensure_parent(cfg$paths$pruned), row.names = FALSE)
-# write.csv(df_after95, "BeastAffinitySeq8_pruned95_v3.csv", row.names = FALSE)
+
+# B) Pruning más amplio en pair_cluster_95, solo para comparar (no se guarda).
+#    Duplica el tiempo del paso; se activa con pruning.compare_pair_cluster_95.
+if (isTRUE(pr$compare_pair_cluster_95)) {
+  res95 <- prune_pair_cluster_single_step_v3(
+    df,
+    pair_key = "pair_cluster_95",
+    
+    # exact dedupe
+    exact_dedup_mode = "softcap",
+    exact_K_homo = 2L,
+    exact_K_heter = 4L,
+    
+    # pruning
+    activate_n = 12L,
+    area_range_pct_thr = 4.0,
+    
+    K_redund_homo = 2L,
+    K_redund_heter = 4L,
+    K_var_homo = 6L,
+    K_var_heter = 10L
+  )
+  
+  print(res95$pruning_summary)
+  print(res95$audits$profile)
+  print(res95$audits$homo)
+  print(res95$audits$pair_exact_repeats)
+  print(res95$audits$pair_clusters_multi)
+  print(res95$audits$chain_clusters_multi)
+  print(res95$audits$quality_summary)
+  print(res95$audits$top_pair_clusters_before)
+  print(res95$audits$top_pair_clusters_after)
+}

@@ -22,6 +22,7 @@ changed is how the steps are wired together, plus a few bug fixes.
 | `11_build_test_set.R` | `mmseqs_chain_clustering_out/3_test_set_datatable.R` |
 | `12_trainval_splits.R` | `mmseqs_chain_clustering_out/4_trainval_splits.R` (+ the validation export done by hand) |
 | `13_hard_negatives.py` | new (Seq5 had in-assembly negatives with label conflicts; see below) |
+| `14_leakage_audit.py` | new |
 | `analysis/clustering_stats.R` | `mmseqs_chain_clustering_out/1_clustering_stats.R` |
 | — | `5_last_filtering.R` (the length cut is now a parameter of step 07) |
 
@@ -62,9 +63,18 @@ To reproduce Seq8 exactly, set these values in `config/config.yaml`:
 | `quality_filter.max_chain_length` | 600 | 900 (the saved script said 800) |
 | `quality_filter.max_solvation_density` | null (off) | -0.0068 |
 | `enrichment.homo_similarity` | on an alignment | positional identity, no alignment |
+| `clustering.method` | `connected_components` | `set_cover` |
 
 `quality_filter.coverage_metric: internal_coverage` and `quality_filter.max_resolution`
 are new options, off by default.
+
+## Homology leakage
+
+The Seq8 splits were built on MMseqs2 set-cover clusters. Auditing them
+(step 14) shows leaks at the design threshold of every set: 115 of 3,664
+validation pairs at 90 %, 8 and 6 of 100 C2 pairs at 70 and 80 %, and 4 of 144
+and 4 of 147 C3 chains at 40 and 50 %. v1 clusters by connected components,
+which removes them by construction.
 
 ## Bug fixes
 
@@ -102,7 +112,9 @@ The R scripts keep their original logic. The only edits are mechanical:
 reading the config (input/output paths and the thresholds that were literals),
 writing outputs with `row.names = FALSE`, sending the histograms of step 07 to
 `reports/07_quality_filter_plots.pdf`, the `easy_score` fix above, and the
-validation export at the end of step 12.
+validation export at the end of step 12, dropping the helper column `.area`
+from the output of step 10 and making its comparison run in `pair_cluster_95`
+optional (`pruning.compare_pair_cluster_95`), which halves the run time.
 
 ## Regression against the Seq8 files
 

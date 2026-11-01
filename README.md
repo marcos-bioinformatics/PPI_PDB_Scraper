@@ -13,9 +13,11 @@ Starting from any set of IDs exported from the RCSB Advanced Search, it:
 4. adds sequence, coverage and experimental-quality metadata to every pair,
 5. filters by quality, removes chains with non-standard residues and checks
    that every PISA interface has real atomic contacts,
-6. clusters all chains with MMseqs2 at eight identity thresholds,
+6. clusters all chains with MMseqs2 at eight identity thresholds (connected
+   components, so that cluster-based splits do not leak homologues),
 7. prunes redundancy and builds a test set (C1/C2/C3) and cluster-aware train/val splits,
-8. optionally adds **hard negatives**: chains of the same complex that are not in contact.
+8. optionally adds **hard negatives**: chains of the same complex that are not in contact,
+9. audits the homology leakage between training and test/validation sets.
 
 ## Pipeline
 
@@ -32,11 +34,12 @@ clustering); R steps take the data-analysis decisions (filters, pruning, splits)
 | 06 | `06_enrich_mmcif.py` | Sequences, coverage, homo/hetero, method, resolution, R-free | `06_enriched.csv` |
 | 07 | `07_quality_filter.R` | Exploratory analysis + quality filter + gold/silver tier | `07_quality_filtered.csv` |
 | 08 | `08_check_structures.py` | Drops chains with non-standard amino acids and pairs without atomic contacts | `08_checked.csv` |
-| 09 | `09_cluster_chains.py` | MMseqs2 chain clustering at 98–40 % identity | `09_clustered.csv` |
+| 09 | `09_cluster_chains.py` | MMseqs2 chain clustering at 98–40 % identity (connected components) | `09_clustered.csv` |
 | 10 | `10_prune_redundancy.R` | Exact-duplicate soft cap + pruning in `pair_cluster_98` | `10_pruned.csv` |
 | 11 | `11_build_test_set.R` | Test set: C1 (train-like), C2 (new pairs), C3 (unseen proteins) | `processed/test.csv` |
 | 12 | `12_trainval_splits.R` | Cluster-aware train/val splits and family weights | `processed/trainval_splits.csv`, `processed/validation.csv` |
 | 13 | `13_hard_negatives.py` | Non-contacting chain pairs of the same assembly, assigned to splits | `processed/hard_negatives.csv` |
+| 14 | `14_leakage_audit.py` | Homology leakage of each test bucket and of validation against training | `reports/14_leakage_audit.json` |
 
 `analysis/clustering_stats.R` is an optional exploratory report on the clusters
 (`snakemake --cores 1 clustering_stats`).
@@ -47,6 +50,7 @@ flowchart LR
   s03 --> s04[04 mmCIF download] --> s05[05 audit] --> s06[06 enrich]
   s06 --> s07[07 quality filter] --> s08[08 structure checks] --> s09[09 MMseqs2]
   s09 --> s10[10 prune] --> s11[11 test set] --> s12[12 train/val splits] --> s13[13 hard negatives]
+  s12 --> s14[14 leakage audit]
 ```
 
 ## Installation
@@ -141,15 +145,50 @@ have at least `min_residue_contacts` residue pairs with amino-acid heavy atoms
 within `cutoff` Å; this catches PISA interfaces that cannot be mapped onto the
 structure.
 
+**Clustering (`clustering`, step 09).** Chains are clustered at eight
+identity thresholds (98 to 40 %); the clusters define the pruning groups
+(98 %), the validation splits (90, 80, 60 %), the C2 test buckets (pair
+clusters at 70 and 80 %) and the C3 buckets (chain clusters at 40 and 50 %).
+The default method, `connected_components`, runs one all-vs-all MMseqs2 search
+and links two sequences when their identity is above the threshold with the
+required alignment coverage; clusters are the connected components (single
+linkage). This guarantees that no two sequences of different clusters are
+similar above the threshold, so splits made by cluster do not leak homologues;
+the price is that large families can merge into big clusters (at 40 %, the
+largest component of the Seq8 dataset holds 7 % of the sequences). The
+alternative `set_cover` (MMseqs2 `cluster`, used for BeastAffinitySeq8) only
+guarantees that every member is similar to its representative: members of
+different clusters can still be similar above the threshold, which left about
+3 % of the Seq8 validation pairs and 3 % of its unseen-protein test chains with
+a homologue in training. Other approaches can be preferable depending on the
+question: greedy incremental clustering (CD-HIT), graph-partitioning methods
+that balance split sizes while removing cross-split homology (GraphPart),
+structure-based clustering (Foldseek, TM-score), which also catches remote
+homologues below ~30 % sequence identity, or splits by domain classification
+(CATH, SCOP, ECOD).
+
 **Redundancy (`pruning`, step 10).** Many entries contain several copies of
 the same complex (non-crystallographic symmetry, several assemblies), and close
-homologues appear across entries. Identical sequence pairs are soft-capped to
-`exact_K_homo` / `exact_K_heter` rows, and pair clusters (`pair_key`, 98 %
-identity by default) with more than `activate_n` rows are pruned to
-`K_redund_*` rows when their interface areas are almost identical, or to
-`K_var_*` rows chosen across interface-area bins otherwise. Keeping several
-copies (2 homo / 4 hetero by default) preserves close variants such as point
-mutants; set the caps to 1 for a strictly non-redundant dataset.
+homologues appear across entries. The step works in two stages:
+
+1. *Identical sequence pairs* are capped, across the whole dataset, to the best
+   `exact_K_homo` / `exact_K_heter` rows (ranked by coverage, P-value,
+   interface area, R-free, resolution and solvation energy). In Seq8 this
+   stage removed 92 % of the pruned rows: one sequence pair appeared 1,081 times.
+2. *Pair clusters* (`pair_key`, by default `pair_cluster_98`: both chains at
+   least 98 % identical) with more than `activate_n` rows are reduced to
+   `K_redund_*` rows when their interface areas are almost identical (range
+   within `area_range_pct_thr` % of the mean) or to `K_var_*` rows spread over
+   interface-area bins otherwise.
+
+Point mutants and variants with a few substitutions are different sequence
+pairs, so the first stage keeps them, but they share a 98 % pair cluster, so
+the second stage keeps only a few of them per complex. If you want mutant
+series (e.g. to learn the effect of substitutions on the interface), raise
+`activate_n` (a very large value disables the second stage) or the `K_*`
+values; for a strictly non-redundant set, set every `K` to 1.
+`compare_pair_cluster_95` additionally prints a broader pruning in
+`pair_cluster_95` for comparison.
 
 **Test set and splits (`test_set`, `splits`, steps 11–12).** C1 rows are
 train-like, C2 rows are new pairings of known proteins (pair clusters at 70 and
@@ -169,6 +208,14 @@ entry, so that ribosomes and capsids do not dominate. Each negative inherits
 the split of its proteins (test if any chain is in the test set or in a
 held-out C3 cluster).
 
+**Leakage audit (step 14).** Every chain of the test buckets and of the
+validation set is searched against the training chains with the identity and
+coverage criteria of step 09. `reports/14_leakage_audit.json` gives, for each
+set, the number of leaks at its design threshold (chain level for the
+unseen-protein C3 buckets, pair level for C2 and validation), and
+`reports/14_leakage_by_threshold.tsv` the full picture at every threshold. With
+connected components all of them should be zero.
+
 ## Outputs
 
 All files are written under `data/` (configurable with `data_dir`):
@@ -184,6 +231,14 @@ data/
 
 Disk space: about 25 KB of PISA JSON and 0.27 MB of mmCIF per assembly, i.e.
 ~0.5 GB for the 1,500-ID test and roughly 30 GB for a list of ~160,000 IDs.
+
+## Troubleshooting
+
+- **"Output … has older modification time than input … clock skew" (WSL2).**
+  The WSL2 clock can jump back after the computer sleeps. Run the same
+  `snakemake` command again; it resumes from the step that stopped.
+- **Failed downloads.** Steps 01 and 04 report failed files in their manifests;
+  `snakemake --cores 8 --forcerun download_structures` retries them.
 
 ## Data sources
 

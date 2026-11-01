@@ -68,15 +68,32 @@ contacts:
 
 # --- 09 Chain clustering (MMseqs2) -------------------------------------------
 clustering:
+  # connected_components: single-linkage clusters from one all-vs-all search; no
+  #   two sequences of different clusters are similar above the threshold
+  #   (leak-free cluster splits). set_cover: MMseqs2 cluster/linclust (Seq8).
+  method: connected_components
   thresholds: [0.98, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40]
-  coverage: 0.90
-  cov_mode: 1
-  engine: cluster              # "cluster" (sensitive) or "linclust" (fast)
+  coverage: 0.90               # alignment coverage required to link two sequences
+  cov_mode: 1                  # MMseqs2 --cov-mode (1 = coverage of the target)
+  search_sensitivity: 7.5      # connected_components: MMseqs2 -s (higher finds more remote homologues)
+  max_seqs: 1000               # connected_components: candidate hits kept per sequence
+  engine: cluster              # set_cover: "cluster" (sensitive) or "linclust" (fast)
 
 # --- 10 Redundancy pruning (R) -----------------------------------------------
+# 1) Identical sequence pairs (anywhere in the dataset) are capped to the best
+#    exact_K_homo / exact_K_heter rows (ranked by coverage, p-value, area, R-free,
+#    resolution, solvation energy). Point mutants are different sequence pairs,
+#    so they are not affected by this cap.
+# 2) Pair clusters (pair_key) with more than activate_n rows are pruned: to
+#    K_redund_* rows if their interface areas are within area_range_pct_thr % of
+#    the mean, otherwise to K_var_* rows spread over interface-area bins.
+#    pair_cluster_98 groups pairs whose two chains are >= 98 % identical, i.e. it
+#    also groups point mutants and variants with a few substitutions. To keep
+#    mutant series, raise activate_n (e.g. 1000000 disables this step) or K_*.
+# For a strictly non-redundant set, set every K to 1.
 pruning:
   pair_key: pair_cluster_98
-  exact_dedup_mode: softcap
+  exact_dedup_mode: softcap    # "softcap" (K rows), "keep1" or "none"
   exact_K_homo: 2
   exact_K_heter: 4
   activate_n: 8
@@ -85,6 +102,7 @@ pruning:
   K_redund_heter: 4
   K_var_homo: 4
   K_var_heter: 8
+  compare_pair_cluster_95: false   # also run (and print) a broader pruning in pair_cluster_95, for comparison only
 
 # --- 11 Test set (R) ---------------------------------------------------------
 test_set:
@@ -148,5 +166,6 @@ paths:
   trainval_splits: "{data_dir}/processed/trainval_splits.csv"
   validation: "{data_dir}/processed/validation.csv"
   hard_negatives: "{data_dir}/processed/hard_negatives.csv"
+  leakage_audit: "{data_dir}/reports/14_leakage_audit.json"
   reports_dir: "{data_dir}/reports"
   logs_dir: "{data_dir}/logs"

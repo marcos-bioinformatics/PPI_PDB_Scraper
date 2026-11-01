@@ -5,8 +5,19 @@ Input : paths.checked (step 08)
 Output: paths.clustered        input rows + molA/molB/pair cluster IDs per threshold
         paths.clustering_dir/  unique_sequences.fasta, cXX/clusters.tsv, summary.txt/json
 
+clustering.method:
+  connected_components  (default) one all-vs-all MMseqs2 search; at each
+        threshold, two sequences are linked when identity >= threshold and the
+        coverage criterion holds, and clusters are the connected components
+        (single linkage). No two sequences of different clusters are similar
+        above the threshold, so cluster-based splits do not leak homologues.
+  set_cover  MMseqs2 cluster/linclust as in BeastAffinitySeq8: every member is
+        similar to its representative, but members of different clusters can be
+        similar above the threshold.
+
 Unique sequences are identified by sha1(sequence)[:16]. For each threshold XX:
   molA_cluster_cXX / molB_cluster_cXX  representative seq_uid of the chain's cluster
+                                       (smallest member ID for connected components)
   pair_cluster_cXX                     order-invariant "min||max" of both chain clusters
 """
 
@@ -22,6 +33,8 @@ from typing import Dict, List
 
 import numpy as np
 import pandas as pd
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 
 from common import ensure_parent, get_logger, parse_args, seq_uid
 
@@ -36,6 +49,40 @@ def run(cmd: List[str]) -> None:
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{p.stdout}\n{p.stderr}")
+
+
+def all_vs_all_hits(fasta: Path, work_dir: Path, ccfg: Dict, threads: int) -> pd.DataFrame:
+    """MMseqs2 search of every sequence against all, down to the lowest threshold."""
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True)
+    hits = work_dir / "hits.m8"
+    run(["mmseqs", "easy-search", str(fasta), str(fasta), str(hits), str(work_dir / "tmp"),
+         "--min-seq-id", str(min(ccfg["thresholds"])), "-c", str(ccfg["coverage"]),
+         "--cov-mode", str(ccfg["cov_mode"]), "-s", str(ccfg["search_sensitivity"]),
+         "--max-seqs", str(ccfg["max_seqs"]), "--threads", str(threads),
+         "--format-output", "query,target,fident"])
+    df = pd.read_csv(hits, sep="\t", header=None, names=["query", "target", "fident"], dtype={"query": str, "target": str})
+    shutil.rmtree(work_dir)
+    return df
+
+
+def components_tsv(uids: List[str], hits: pd.DataFrame, thr: float, out_dir: Path) -> Path:
+    """Connected components of the hits with identity >= thr; returns clusters.tsv
+    (rep<TAB>member), the representative being the smallest member ID."""
+    index = {u: i for i, u in enumerate(uids)}
+    edges = hits[hits["fident"] >= thr]
+    graph = coo_matrix((np.ones(len(edges)), (edges["query"].map(index), edges["target"].map(index))),
+                       shape=(len(uids), len(uids)))
+    _, labels = connected_components(graph, directed=False)
+    members = pd.DataFrame({"member": uids, "label": labels})
+    members["rep"] = members.groupby("label")["member"].transform("min")
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+    tsv = out_dir / "clusters.tsv"
+    members[["rep", "member"]].sort_values(["rep", "member"]).to_csv(tsv, sep="\t", header=False, index=False)
+    return tsv
 
 
 def mmseqs_cluster(fasta: Path, out_dir: Path, thr: float, ccfg: Dict, threads: int) -> Path:
@@ -109,11 +156,21 @@ def main() -> None:
         for uid, seq in uid_to_seq.items():
             fh.write(f">{uid}\n{seq}\n")
 
+    method = ccfg["method"]
+    if method == "connected_components":
+        log.info("MMseqs2 all-vs-all search (min-seq-id %.2f, -s %s)", min(ccfg["thresholds"]), ccfg["search_sensitivity"])
+        hits = all_vs_all_hits(fasta, out_dir / "search", ccfg, int(cfg["threads"]))
+    elif method != "set_cover":
+        raise SystemExit(f"Unknown clustering.method: {method}")
+
     summaries = []
     for thr in ccfg["thresholds"]:
         tag = thr_tag(float(thr))
-        log.info("MMseqs2 %s at min-seq-id %.2f", ccfg["engine"], thr)
-        tsv = mmseqs_cluster(fasta, out_dir / tag, float(thr), ccfg, int(cfg["threads"]))
+        if method == "connected_components":
+            tsv = components_tsv(list(uid_to_seq), hits, float(thr), out_dir / tag)
+        else:
+            log.info("MMseqs2 %s at min-seq-id %.2f", ccfg["engine"], thr)
+            tsv = mmseqs_cluster(fasta, out_dir / tag, float(thr), ccfg, int(cfg["threads"]))
         clusters = pd.read_csv(tsv, sep="\t", header=None, names=["rep", "member"], dtype=str)
         summaries.append(summarize(clusters, instances, float(thr)))
 
@@ -132,7 +189,7 @@ def main() -> None:
 
     generated = datetime.now().isoformat(timespec="seconds")
     (out_dir / "summary.json").write_text(json.dumps({
-        "generated": generated, "engine": ccfg["engine"], "coverage": ccfg["coverage"],
+        "generated": generated, "method": method, "engine": ccfg["engine"], "coverage": ccfg["coverage"],
         "cov_mode": ccfg["cov_mode"], "thresholds": ccfg["thresholds"],
         "unique_sequences": len(uid_to_seq), "chain_instances": int(len(uid_a) * 2),
         "per_threshold": [asdict(s) for s in summaries],
@@ -140,7 +197,7 @@ def main() -> None:
 
     header = f"{'thr':>5} {'clusters':>9} {'singletons':>11} {'max':>6} {'p50':>4} {'p90':>4} {'p99':>4} {'top10%':>7} {'max_inst':>9}"
     lines = [f"MMseqs2 chain clustering ({generated})",
-             f"engine={ccfg['engine']}  coverage={ccfg['coverage']}  cov_mode={ccfg['cov_mode']}",
+             f"method={method}  coverage={ccfg['coverage']}  cov_mode={ccfg['cov_mode']}",
              f"unique sequences={len(uid_to_seq)}  chain instances={len(uid_a) * 2}", "", header]
     for s in summaries:
         lines.append(f"{s.thr:5.2f} {s.n_clusters:9d} {s.singleton_clusters:6d} ({s.singleton_clusters_pct:4.1f}%)"
