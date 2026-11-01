@@ -76,7 +76,11 @@ def parse_assembly(task: Tuple[str, int, str, bool]) -> Tuple[List[Dict[str, Any
                                            as_list(mm.get("_entity_poly.pdbx_seq_one_letter_code_can")))):
             if i < len(types) and "polypeptide" not in types[i].lower():
                 continue
-            seq_by_entity[ent] = re.sub(r"[^A-Za-z]", "", seq).upper()
+            # terminal X are caps such as ACE / NH2: dropping them gives capped and
+            # uncapped constructs of a protein the same sequence
+            clean = re.sub(r"[^A-Za-z]", "", seq).upper().strip("X")
+            if clean:
+                seq_by_entity[ent] = clean
 
         seqres = defaultdict(set)
         entity_of: Dict[str, str] = {}
@@ -164,15 +168,28 @@ def run_cached(name: str, func, tasks: List[tuple], parts_dir: Path, workers: in
 _ALIGNER = None
 
 
-def aligned_identity(pair: Tuple[str, str]) -> float:
+def _to_matrix_alphabet(seq: str, alphabet: str) -> str:
+    """Selenocysteine (U) and pyrrolysine (O) are not in BLOSUM62: score them as
+    C and K; any other unknown letter as X."""
+    seq = seq.replace("U", "C").replace("O", "K")
+    return "".join(c if c in alphabet else "X" for c in seq)
+
+
+def aligned_identity(pair: Tuple[str, str]) -> Optional[float]:
     """Identical residues of a global alignment with free end gaps (BLOSUM62,
     gap open -10 / extend -0.5) divided by the length of the shorter sequence."""
     global _ALIGNER
     if _ALIGNER is None:
         _ALIGNER = Align.PairwiseAligner(mode="global", open_gap_score=-10, extend_gap_score=-0.5,
                                          end_gap_score=0, substitution_matrix=substitution_matrices.load("BLOSUM62"))
-    a, b = pair
-    aln = _ALIGNER.align(a, b)[0]
+    alphabet = _ALIGNER.substitution_matrix.alphabet
+    a, b = (_to_matrix_alphabet(x, alphabet) for x in pair)
+    if not a or not b:
+        return None
+    try:
+        aln = _ALIGNER.align(a, b)[0]
+    except (ValueError, OverflowError):
+        return None
     matches = sum(1 for x, y in zip(aln[0], aln[1]) if x == y and x != "-")
     return matches / min(len(a), len(b))
 

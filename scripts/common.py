@@ -14,12 +14,16 @@ import json
 import logging
 import os
 import re
+import time
+import zlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import requests
 import yaml
 from requests.adapters import HTTPAdapter
+from tqdm import tqdm
 from urllib3.util.retry import Retry
 
 DEFAULT_CONFIG = "config/config.yaml"
@@ -27,6 +31,9 @@ DEFAULT_CONFIG = "config/config.yaml"
 # Classic 4-character PDB IDs (first character is a digit).
 # Extended IDs (pdb_XXXXXXXX) will be handled in v2.
 PDB_ID_RE = re.compile(r"^[0-9][a-z0-9]{3}$")
+# Entity / assembly / chain forms exported by RCSB searches: 4HHB_1, 4HHB-1, 4HHB.A
+PDB_ID_SUFFIX_RE = re.compile(r"^([0-9][a-z0-9]{3})[_\-.][a-z0-9]+$")
+NUMBER_RE = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$")
 
 
 # -----------------------------------------------------------------------------
@@ -42,18 +49,37 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
-def _load_raw(path: str | Path) -> Dict[str, Any]:
-    with Path(path).open("r", encoding="utf-8") as fh:
+def _coerce_numbers(obj: Any) -> Any:
+    """YAML 1.1 reads values such as 1e-3 as strings: turn numeric strings into numbers."""
+    if isinstance(obj, dict):
+        return {k: _coerce_numbers(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_coerce_numbers(v) for v in obj]
+    if isinstance(obj, str) and NUMBER_RE.match(obj.strip()):
+        return float(obj) if re.search(r"[.eE]", obj) else int(obj)
+    return obj
+
+
+def _load_raw(path: str | Path, seen: Tuple[str, ...] = ()) -> Dict[str, Any]:
+    path = Path(path)
+    if str(path.resolve()) in seen:
+        raise SystemExit(f"Config inheritance cycle: {' -> '.join(seen)} -> {path}")
+    with path.open("r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh) or {}
     base = cfg.pop("base", None)
-    return _deep_merge(_load_raw(base), cfg) if base else cfg
+    if not base:
+        return cfg
+    base_path = Path(base)
+    if not base_path.is_file() and (path.parent / base).is_file():
+        base_path = path.parent / base  # relative to the config file instead of the working directory
+    return _deep_merge(_load_raw(base_path, seen + (str(path.resolve()),)), cfg)
 
 
 def load_config(path: str | Path = DEFAULT_CONFIG) -> Dict[str, Any]:
     """Load a YAML config. A ``base:`` key points to a parent config whose
     values are inherited and can be overridden (used by config/test.yaml).
     ``{data_dir}`` in paths is replaced by the configured data_dir."""
-    cfg = _load_raw(path)
+    cfg = _coerce_numbers(_load_raw(path))
     data_dir = str(cfg.get("data_dir", "data"))
     cfg["paths"] = {k: str(v).replace("{data_dir}", data_dir) for k, v in cfg.get("paths", {}).items()}
     return cfg
@@ -79,19 +105,26 @@ def get_logger(name: str) -> logging.Logger:
 # PDB IDs
 # -----------------------------------------------------------------------------
 def normalize_pdb_id(token: str) -> Optional[str]:
-    s = token.strip().lower()
-    return s if PDB_ID_RE.match(s) else None
+    s = token.strip().strip("\"'").lower()
+    if PDB_ID_RE.match(s):
+        return s
+    m = PDB_ID_SUFFIX_RE.match(s)
+    return m.group(1) if m else None
 
 
-def _open_text(path: Path):
-    if path.suffix == ".gz":
-        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
-    return path.open("r", encoding="utf-8", errors="replace")
+def _read_text(path: Path) -> str:
+    """Text of an ID list (.txt or .txt.gz), handling UTF-8 BOMs and UTF-16 files
+    (e.g. saved from PowerShell)."""
+    raw = gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
 
 
 def read_id_lists(input_dir: str | Path) -> Tuple[List[str], List[Tuple[str, str]]]:
     """Read every .txt / .txt.gz file in ``input_dir`` (RCSB Advanced Search
-    exports: IDs separated by commas, whitespace or one per line).
+    exports: IDs separated by commas, semicolons, whitespace or one per line;
+    entity or assembly forms such as 4HHB_1 are reduced to the entry ID).
 
     Returns (unique IDs in first-seen order, rejected (file, token) pairs).
     """
@@ -103,14 +136,14 @@ def read_id_lists(input_dir: str | Path) -> Tuple[List[str], List[Tuple[str, str
     seen: Dict[str, None] = {}
     rejected: List[Tuple[str, str]] = []
     for path in files:
-        with _open_text(path) as fh:
-            for line in fh:
-                for token in line.replace(",", " ").split():
-                    pid = normalize_pdb_id(token)
-                    if pid is None:
-                        rejected.append((path.name, token))
-                    else:
-                        seen.setdefault(pid, None)
+        for token in re.split(r"[,;\s]+", _read_text(path)):
+            if not token:
+                continue
+            pid = normalize_pdb_id(token)
+            if pid is None:
+                rejected.append((path.name, token))
+            else:
+                seen.setdefault(pid, None)
     return list(seen), rejected
 
 
@@ -171,7 +204,7 @@ def gzip_is_valid(path: Path) -> bool:
             while fh.read(1 << 20):
                 pass
         return True
-    except (OSError, EOFError):
+    except (OSError, EOFError, zlib.error):
         return False
 
 
@@ -185,7 +218,7 @@ def json_is_valid(path: Path) -> bool:
     try:
         read_json(path)
         return True
-    except (OSError, EOFError, ValueError):
+    except (OSError, EOFError, ValueError, zlib.error):
         return False
 
 
@@ -197,7 +230,7 @@ def make_session(pool_size: int, user_agent: str = "BeastAffinity-pipeline/1.0")
         total=6,
         backoff_factor=1.0,
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods={"GET", "HEAD"},
+        allowed_methods={"GET", "HEAD", "POST"},  # the GraphQL POST queries are read-only
         respect_retry_after_header=True,
         raise_on_status=False,
     )
@@ -211,19 +244,8 @@ def make_session(pool_size: int, user_agent: str = "BeastAffinity-pipeline/1.0")
     return session
 
 
-def download_file(session: requests.Session, url: str, dest: Path, validator, timeout=(10, 120),
-                  gzip_output: bool = False, exists_check=None) -> str:
-    """Download ``url`` to ``dest`` atomically (gzip-compressing it if
-    ``gzip_output``).
-
-    Returns "skip" (dest already valid), "ok", "missing" (HTTP 404) or an error
-    string starting with "error:". ``validator(path) -> bool`` checks a fresh
-    download; ``exists_check`` (default: validator) decides whether a file
-    already on disk can be kept.
-    """
-    if dest.is_file() and (exists_check or validator)(dest):
-        return "skip"
-    ensure_parent(dest)
+def _download_once(session: requests.Session, url: str, dest: Path, validator, timeout,
+                   gzip_output: bool) -> str:
     tmp = dest.with_name(dest.name + ".part")
     try:
         with session.get(url, stream=True, timeout=timeout) as r:
@@ -250,24 +272,82 @@ def download_file(session: requests.Session, url: str, dest: Path, validator, ti
             tmp = gz_tmp
         os.replace(tmp, dest)
         return "ok"
-    except requests.RequestException as exc:
+    except (requests.RequestException, OSError) as exc:
         tmp.unlink(missing_ok=True)
         return f"error:{type(exc).__name__}: {exc}"
 
 
+def download_file(session: requests.Session, url: str, dest: Path, validator, timeout=(10, 120),
+                  gzip_output: bool = False, exists_check=None, remote_mtime: Optional[float] = None,
+                  attempts: int = 4) -> str:
+    """Download ``url`` to ``dest`` atomically (gzip-compressing it if ``gzip_output``).
+
+    Returns "skip" (dest already valid and up to date), "ok", "missing" (HTTP
+    404) or an error string starting with "error:". ``validator(path) -> bool``
+    checks a fresh download; ``exists_check`` (default: validator) decides
+    whether a file already on disk can be kept. With ``remote_mtime`` (epoch
+    seconds of the server copy) an older local file is downloaded again, and a
+    new file gets that modification time. Failed transfers (including bodies
+    cut mid-way, which urllib3 does not retry) are retried ``attempts`` times.
+    """
+    if dest.is_file() and (exists_check or validator)(dest):
+        if remote_mtime is None or dest.stat().st_mtime >= remote_mtime - 60:
+            return "skip"
+    ensure_parent(dest)
+    status = "error:not attempted"
+    for attempt in range(attempts):
+        status = _download_once(session, url, dest, validator, timeout, gzip_output)
+        if not status.startswith("error"):
+            break
+        time.sleep(2 ** attempt)
+    if status == "ok" and remote_mtime is not None:
+        os.utime(dest, (remote_mtime, remote_mtime))
+    return status
+
+
+def run_threaded(func: Callable, items: Sequence, workers: int, desc: str, chunk: int = 5000) -> List[Any]:
+    """``func`` over ``items`` with a thread pool, in input order, submitting at
+    most ``chunk`` tasks at a time (keeps memory flat for hundreds of thousands
+    of downloads)."""
+    out: List[Any] = []
+    with ThreadPoolExecutor(max_workers=workers) as ex, tqdm(total=len(items), desc=desc, unit="file") as bar:
+        for start in range(0, len(items), chunk):
+            for result in ex.map(func, items[start:start + chunk]):
+                out.append(result)
+                bar.update(1)
+    return out
+
+
+def check_failures(n_failed: int, n_total: int, max_fraction: float, what: str, log: logging.Logger) -> None:
+    """Stop the step (non-zero exit) when too many downloads failed; a rerun resumes."""
+    if n_failed and n_total and n_failed / n_total > max_fraction:
+        raise SystemExit(f"{n_failed} of {n_total} {what} failed (more than {max_fraction:.2%}); "
+                         "rerun this step to retry them.")
+    if n_failed:
+        log.warning("%d of %d %s failed (within the tolerated %.2f%%).", n_failed, n_total, what, 100 * max_fraction)
+
+
 def rcsb_entries(session: requests.Session, url: str, ids: List[str], fields: str,
-                 batch: int = 1000) -> List[Dict[str, Any]]:
+                 batch: int = 1000, attempts: int = 4) -> List[Dict[str, Any]]:
     """Query the RCSB Data API (GraphQL) for ``fields`` of many entries, in batches.
-    Results are not returned in input order: match them by ``rcsb_id``."""
+    Results are not returned in input order: match them by ``rcsb_id``. Entries
+    that RCSB no longer serves (obsolete IDs) are simply absent."""
     query = "query($ids: [String!]!) { entries(entry_ids: $ids) { rcsb_id %s } }" % fields
     out: List[Dict[str, Any]] = []
     for start in range(0, len(ids), batch):
-        r = session.post(url, json={"query": query, "variables": {"ids": ids[start:start + batch]}},
-                         timeout=(10, 300))
-        if r.status_code != 200:
-            raise SystemExit(f"RCSB GraphQL returned HTTP {r.status_code}; rerun this step to retry.")
-        payload = r.json()
-        if payload.get("errors"):
-            raise SystemExit(f"RCSB GraphQL error: {payload['errors'][:1]}")
-        out.extend(payload["data"]["entries"] or [])
+        body = {"query": query, "variables": {"ids": ids[start:start + batch]}}
+        problem = ""
+        for attempt in range(attempts):
+            try:
+                r = session.post(url, json=body, timeout=(10, 300))
+                payload = r.json() if r.status_code == 200 else None
+                if payload is not None and not payload.get("errors"):
+                    out.extend(payload["data"]["entries"] or [])
+                    break
+                problem = f"HTTP {r.status_code}" if payload is None else f"GraphQL error {payload['errors'][:1]}"
+            except (requests.RequestException, ValueError) as exc:
+                problem = f"{type(exc).__name__}: {exc}"
+            time.sleep(2 ** attempt)
+        else:
+            raise SystemExit(f"RCSB Data API failed ({problem}); rerun this step to retry.")
     return out

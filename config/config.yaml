@@ -13,9 +13,11 @@
 input_dir: pdb_ids
 
 # --- Resources ---------------------------------------------------------------
-workers: 6              # parallel processes for the parsing steps (02, 06, 08)
+workers: 6              # parallel processes for the parsing steps (02, 06, 08, 13)
 download_workers: 12    # parallel HTTP connections (01, 04)
-threads: 8              # MMseqs2 threads (09)
+download_retries: 4     # attempts per file (also for transfers cut mid-way)
+max_failed_fraction: 0.001   # steps 01 and 04 stop if more downloads than this fail (rerun to retry)
+threads: 8              # MMseqs2 threads (09, 14)
 
 # --- 01-02 PISA (PDBe) -------------------------------------------------------
 pisa:
@@ -24,6 +26,8 @@ pisa:
   # PDBe can keep files of assemblies removed in later revisions of an entry;
   # if true, only the assemblies the entry has today (RCSB Data API) are used.
   only_current_assemblies: true
+  # Stop if more IDs than this have no PISA data at all (wrong list or changed listing format).
+  max_missing_fraction: 0.2
   # Pre-filter of step 02: a protein-protein interface becomes a candidate pair
   # only if it passes both thresholds. They also decide which structures are
   # downloaded, so the final thresholds (step 07) can only be stricter.
@@ -37,7 +41,7 @@ rcsb:
 
 # --- 06 mmCIF enrichment -----------------------------------------------------
 enrichment:
-  homo_similarity: 0.80        # is_homo_80: positional identity >= this
+  homo_similarity: 0.80        # is_homo_80: aligned sequence identity (over the shorter chain) >= this
   ignore_hydrogens: true
 
 # --- 07 Quality filter (R) ---------------------------------------------------
@@ -51,7 +55,7 @@ quality_filter:
                                # (resolved / span between first and last resolved residue,
                                # i.e. disordered tags and tails do not count)
   min_coverage: 0.86           # both chains: coverage metric > this
-  min_chain_length: 12         # both chains: length > this
+  min_chain_length: 39         # both chains: length > this (at least 40 residues; Seq8 used 12)
   max_chain_length: 600        # both chains: length <= this
   max_p_value: 0.4             # p_value <= this
   min_interface_area: 800      # interface_area > this
@@ -61,7 +65,8 @@ quality_filter:
 
 # --- 08 Structure checks -----------------------------------------------------
 special_residues:
-  allowed: [MSE, SEM, SEC]     # non-standard residues tolerated in a chain
+  allowed: [MSE, SEM, SEC]     # non-standard polymer residues tolerated in a chain
+  ignore: [ACE, NH2]           # terminal caps, neither counted nor forbidden
 contacts:
   cutoff: 4.5                  # heavy-atom distance (A) that defines a contact
   min_residue_contacts: 1      # positives need at least this many residue pairs in contact
@@ -76,6 +81,7 @@ clustering:
   coverage: 0.90               # alignment coverage required to link two sequences
   cov_mode: 1                  # MMseqs2 --cov-mode (1 = coverage of the target)
   search_sensitivity: 7.5      # connected_components: MMseqs2 -s (higher finds more remote homologues)
+  evalue: 1.0e-3               # MMseqs2 -e; very short chains cannot reach it (hence min_chain_length)
   max_seqs: 1000               # connected_components: candidate hits kept per sequence
   engine: cluster              # set_cover: "cluster" (sensitive) or "linclust" (fast)
 
@@ -117,7 +123,6 @@ test_set:
   homo_frac: 0.5
   c3_mult: 12
   c2_chain_cap_98_global: 1
-  c2_min_remain_chain: 1
   c2_pick: random              # C2 representative of each pair cluster: random, best or worst quality (Seq8: worst)
 
 # --- 12 Train/validation splits (R) ------------------------------------------
@@ -137,6 +142,8 @@ hard_negatives:
                                # above ~30-40 % identity tend to interact in the same way
   min_distance: 6.0            # minimum heavy-atom distance between the two chains (A)
   max_distance: null           # optional maximum (A), e.g. 12 to keep only near-miss pairs
+  max_per_pair_cluster: 4      # at most this many negatives per pair cluster across entries
+  pair_cluster_key: c98        # (the same complex deposited many times would dominate)
   max_per_entry: 5             # random sample per PDB entry (large complexes would dominate)
   seed: 13
 

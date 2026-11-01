@@ -40,6 +40,10 @@ from common import ensure_parent, get_logger, parse_args, seq_uid
 
 log = get_logger("09_cluster_chains")
 
+# Thresholds the later steps rely on (pruning at 98 %, splits at 90/80/60 %,
+# C2 at 70/80 %, C3 at 40/50 %); more thresholds can be added.
+REQUIRED_THRESHOLDS = {0.98, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40}
+
 
 def thr_tag(thr: float) -> str:
     return f"c{int(round(thr * 100)):02d}"
@@ -51,6 +55,11 @@ def run(cmd: List[str]) -> None:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{p.stdout}\n{p.stderr}")
 
 
+def mmseqs_version() -> str:
+    p = subprocess.run(["mmseqs", "version"], capture_output=True, text=True)
+    return p.stdout.strip()
+
+
 def all_vs_all_hits(fasta: Path, work_dir: Path, ccfg: Dict, threads: int) -> pd.DataFrame:
     """MMseqs2 search of every sequence against all, down to the lowest threshold."""
     if work_dir.exists():
@@ -59,7 +68,7 @@ def all_vs_all_hits(fasta: Path, work_dir: Path, ccfg: Dict, threads: int) -> pd
     hits = work_dir / "hits.m8"
     run(["mmseqs", "easy-search", str(fasta), str(fasta), str(hits), str(work_dir / "tmp"),
          "--min-seq-id", str(min(ccfg["thresholds"])), "-c", str(ccfg["coverage"]),
-         "--cov-mode", str(ccfg["cov_mode"]), "-s", str(ccfg["search_sensitivity"]),
+         "--cov-mode", str(ccfg["cov_mode"]), "-e", str(ccfg["evalue"]), "-s", str(ccfg["search_sensitivity"]),
          "--max-seqs", str(ccfg["max_seqs"]), "--threads", str(threads),
          "--format-output", "query,target,fident"])
     df = pd.read_csv(hits, sep="\t", header=None, names=["query", "target", "fident"], dtype={"query": str, "target": str})
@@ -157,6 +166,10 @@ def main() -> None:
             fh.write(f">{uid}\n{seq}\n")
 
     method = ccfg["method"]
+    missing = sorted(REQUIRED_THRESHOLDS - {round(float(t), 2) for t in ccfg["thresholds"]})
+    if missing:
+        raise SystemExit(f"clustering.thresholds must include {sorted(REQUIRED_THRESHOLDS)} (used by steps "
+                         f"10-14); missing: {missing}")
     if method == "connected_components":
         log.info("MMseqs2 all-vs-all search (min-seq-id %.2f, -s %s)", min(ccfg["thresholds"]), ccfg["search_sensitivity"])
         hits = all_vs_all_hits(fasta, out_dir / "search", ccfg, int(cfg["threads"]))
@@ -189,7 +202,9 @@ def main() -> None:
 
     generated = datetime.now().isoformat(timespec="seconds")
     (out_dir / "summary.json").write_text(json.dumps({
-        "generated": generated, "method": method, "engine": ccfg["engine"], "coverage": ccfg["coverage"],
+        "generated": generated, "mmseqs_version": mmseqs_version(), "method": method, "engine": ccfg["engine"],
+        "evalue": ccfg["evalue"], "search_sensitivity": ccfg["search_sensitivity"], "max_seqs": ccfg["max_seqs"],
+        "coverage": ccfg["coverage"],
         "cov_mode": ccfg["cov_mode"], "thresholds": ccfg["thresholds"],
         "unique_sequences": len(uid_to_seq), "chain_instances": int(len(uid_a) * 2),
         "per_threshold": [asdict(s) for s in summaries],

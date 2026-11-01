@@ -7,10 +7,13 @@ Output: paths.checked                              rows that pass both checks
         reports_dir/08_rows_excluded.csv           excluded rows and reason
         reports_dir/08_structure_checks.json       counts
 
-For every pair, in its assembly file (first model, author chain IDs as in PISA):
+For every pair, in its assembly file (first model, author chain IDs as in PISA,
+polymer residues only):
   1. Special residues: the 20 standard amino acids are always allowed;
      special_residues.allowed (MSE, SEM, SEC by default) are tolerated and
-     counted; any other amino-acid residue excludes the chain.
+     counted, special_residues.ignore (terminal caps ACE, NH2) are skipped; any
+     other polymer residue (UNK, D-amino acids, chromophores, PTMs, ...) excludes
+     the chain. Ligands that share the chain ID are not considered.
   2. Contacts: heavy-atom contacts between the two chains within
      contacts.cutoff A. A pair needs at least contacts.min_residue_contacts
      residue pairs in contact; a PISA interface without real contacts points
@@ -28,7 +31,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from common import ensure_parent, get_logger, parse_args, pisa_subdir, write_json
-from structure_checks import contact_summary, fmt_counter, heavy_atoms, load_model, special_residues
+from structure_checks import contact_summary, fmt_counter, load_chains, special_residues
 
 log = get_logger("08_check_structures")
 
@@ -36,30 +39,29 @@ log = get_logger("08_check_structures")
 def check_assembly(task: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     base = {"pdb_id": task["pdb_id"], "assembly_id": task["assembly_id"]}
     try:
-        model = load_model(task["path"])
+        model = load_chains(task["path"], task["chains"])
     except Exception as exc:  # unreadable file: every row of this assembly is excluded
         err = f"parse_error:{type(exc).__name__}"
         return {"chains": [{**base, "chain_id": c, "keep_chain": False, "error": err, "allowed_special_count": 0,
                             "allowed_special_types": "", "forbidden_special_types": ""} for c in task["chains"]],
                 "pairs": []}
 
-    chains, atoms = [], {}
+    chains = []
     for chain_id in task["chains"]:
         if chain_id not in model:
             chains.append({**base, "chain_id": chain_id, "keep_chain": False, "error": "chain_not_found",
                            "allowed_special_count": 0, "allowed_special_types": "", "forbidden_special_types": ""})
             continue
-        ok, bad = special_residues(model[chain_id], task["allowed"])
+        ok, bad = special_residues(model[chain_id], task["allowed"], task["ignore"])
         chains.append({**base, "chain_id": chain_id, "keep_chain": not bad, "error": "",
                        "allowed_special_count": sum(ok.values()),
                        "allowed_special_types": fmt_counter(ok), "forbidden_special_types": fmt_counter(bad)})
-        atoms[chain_id] = heavy_atoms(model[chain_id])
 
     pairs = []
     for a, b in task["pairs"]:
-        if a in atoms and b in atoms:
+        if a in model and b in model:
             pairs.append({**base, "molA_chain_id": a, "molB_chain_id": b,
-                          **contact_summary(atoms[a], atoms[b], task["cutoff"])})
+                          **contact_summary(model[a], model[b], task["cutoff"])})
     return {"chains": chains, "pairs": pairs}
 
 
@@ -76,6 +78,7 @@ def main() -> None:
     cfg = parse_args(__doc__)
     paths, contacts = cfg["paths"], cfg["contacts"]
     allowed = {x.upper() for x in cfg["special_residues"]["allowed"]}
+    ignore = {x.upper() for x in cfg["special_residues"].get("ignore", [])}
     reports = Path(paths["reports_dir"])
 
     df = pd.read_csv(paths["quality_filtered"], keep_default_na=False, na_values=[""],
@@ -93,7 +96,8 @@ def main() -> None:
     for (pid, asm), chain_ids in sorted(chains.items()):
         path = asm_dir / pisa_subdir(pid) / f"{pid}-assembly{asm}.cif.gz"
         tasks.append({"pdb_id": pid, "assembly_id": asm, "path": str(path), "chains": sorted(chain_ids),
-                      "pairs": sorted(pairs[(pid, asm)]), "allowed": allowed, "cutoff": float(contacts["cutoff"])})
+                      "pairs": sorted(pairs[(pid, asm)]), "allowed": allowed, "ignore": ignore,
+                      "cutoff": float(contacts["cutoff"])})
     log.info("Checking %d structures for %d rows", len(tasks), len(df))
 
     chain_rows, pair_rows = [], []
@@ -117,6 +121,7 @@ def main() -> None:
             f"{side}_special_status": s["keep_chain"].map({True: "ok", False: "forbidden_or_error"}),
             f"{side}_special_error": s["error"].where(s["error"] != "", s["forbidden_special_types"]),
             f"_{side}_keep": s["keep_chain"],
+            f"_{side}_err": s["error"],
             f"_{side}_types": s["allowed_special_types"],
         })
         cols = [c for c in s.columns if c.startswith((f"{side}_", f"_{side}_"))]
@@ -133,12 +138,13 @@ def main() -> None:
                     validate="many_to_one")
 
     special_ok = out["_molA_keep"].fillna(False).astype(bool) & out["_molB_keep"].fillna(False).astype(bool)
+    structure_error = (out["_molA_err"].fillna("missing") != "") | (out["_molB_err"].fillna("missing") != "")
     contacts_ok = out["n_residue_contacts"].fillna(0) >= int(contacts["min_residue_contacts"])
     keep = special_ok & contacts_ok
     excluded = out.loc[~keep, keys + ["molA_chain_id", "molB_chain_id", "molA_special_error",
                                       "molB_special_error", "n_residue_contacts"]].copy()
-    excluded["reason"] = ["special_residues" if not s else "no_contacts"
-                          for s in special_ok[~keep]]
+    excluded["reason"] = ["structure_error" if e else "special_residues" if not s else "no_contacts"
+                          for e, s in zip(structure_error[~keep], special_ok[~keep])]
     excluded.to_csv(ensure_parent(reports / "08_rows_excluded.csv"), index=False)
 
     out = out.loc[keep].drop(columns=[c for c in out.columns if c.startswith("_")])
@@ -149,10 +155,11 @@ def main() -> None:
 
     write_json(reports / "08_structure_checks.json", {
         "rows_in": int(len(df)), "rows_kept": int(len(out)),
-        "excluded_special_residues": int((~special_ok).sum()),
+        "excluded_structure_errors": int(structure_error.sum()),
+        "excluded_special_residues": int((~special_ok & ~structure_error).sum()),
         "excluded_no_contacts": int((special_ok & ~contacts_ok).sum()),
         "chains_scanned": int(len(summary)), "chains_with_forbidden_residues": int((~summary["keep_chain"]).sum()),
-        "allowed_special": sorted(allowed), "contact_cutoff": contacts["cutoff"],
+        "allowed_special": sorted(allowed), "ignored": sorted(ignore), "contact_cutoff": contacts["cutoff"],
         "min_residue_contacts": contacts["min_residue_contacts"],
     })
     log.info("Kept %d of %d rows (%d special residues, %d without contacts)", len(out), len(df),

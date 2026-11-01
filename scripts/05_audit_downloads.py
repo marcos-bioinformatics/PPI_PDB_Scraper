@@ -45,6 +45,7 @@ def main() -> None:
             "entries_without_data": int((pisa["status"] == "no_pisa_data").sum()),
             "assemblies_ok": int((pisa["status"] == "ok").sum()),
             "assemblies_stale": int((pisa["status"] == "stale").sum()),
+            "entries_obsolete": int(pisa.loc[pisa["status"] == "obsolete", "pdb_id"].nunique()),
             "assemblies_error": int((pisa["status"] == "error").sum()),
         },
         "candidate_pairs": {

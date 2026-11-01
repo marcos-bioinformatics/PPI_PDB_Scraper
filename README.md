@@ -81,14 +81,18 @@ Useful Snakemake commands:
 snakemake --cores 8 --until quality_filter           # stop after step 07
 snakemake --cores 8 --forcerun download_structures   # rerun a step (e.g. retry failed downloads)
 snakemake --cores 8 --config cfg=config/test.yaml    # use another config file
+snakemake --cores 1 clustering_stats --config cfg=config/test.yaml  # a target goes before --config
 snakemake --dag | dot -Tsvg > dag.svg                # draw the workflow
 ```
 
 Snakemake only reruns what is missing or out of date: if you change a section
-of the config (for instance `quality_filter`), the next run repeats that step
-and everything downstream of it. Every script can also be run by hand from the
-repository root, e.g. `python scripts/06_enrich_mmcif.py --config config/config.yaml`
-or `Rscript scripts/07_quality_filter.R config/config.yaml`.
+of the config (for instance `quality_filter`) or edit a script, the next run
+repeats that step and everything downstream of it (`snakemake --touch` marks
+the outputs as up to date after a purely cosmetic edit). All parameters live in
+the YAML file: `--config` only accepts `cfg=<file>`, and `--configfile` is not
+used. Every script can also be run by hand from the repository root, e.g.
+`python scripts/06_enrich_mmcif.py --config config/config.yaml` or
+`Rscript scripts/07_quality_filter.R config/config.yaml`.
 
 ### Quick test
 
@@ -97,6 +101,7 @@ or `Rscript scripts/07_quality_filter.R config/config.yaml`.
 
 ```bash
 snakemake --cores 8 --config cfg=config/test.yaml
+python tests/check_outputs.py --config config/test.yaml   # consistency and leakage checks
 ```
 
 ## Choosing the parameters
@@ -116,7 +121,9 @@ on area, P-value and solvation energy. These two values are only a pre-filter
 (they decide which structures are downloaded); the final thresholds are set in
 `quality_filter` and can only be stricter. Only the assemblies an entry has
 today are used (`only_current_assemblies`): the PDBe dump can keep assemblies
-removed in later revisions.
+removed in later revisions, and entries that RCSB no longer serves are listed
+as obsolete. PDBe recomputes PISA when an entry is revised, so a rerun downloads
+again any file that PDBe has updated since the previous run.
 
 **Quality filter (`quality_filter`, step 07).** Experimental method, R-free,
 optional maximum resolution, minimum coverage of both chains, chain length
@@ -128,22 +135,30 @@ residues) and `internal_coverage` (resolved residues between the first and the
 last resolved one): with the latter, disordered expression tags and tails are
 not penalised, only internal gaps. An optional cut on solvation density
 (`solvation_energy / interface_area`) is available but disabled by default.
+`min_chain_length` (at least 40 residues by default; Seq8 used 13) keeps
+peptides out: besides being a different problem, chains this short cannot reach
+a significant MMseqs2 E-value, so near-identical peptides would escape the
+homology clustering of step 09 and its leakage guarantees.
 `max_chain_length` is often limited by the model you plan to train. Homo/hetero
 pairs are defined by the same entity or a sequence identity of at least
 `enrichment.homo_similarity`, measured on a global alignment over the shorter
 chain, so a truncated construct of the same protein counts as homo.
 
-**Structure checks (`special_residues`, `contacts`, step 08).** Chains with
-non-standard amino acids other than the allowed ones are dropped. The default
-is conservative: only the selenium variants used for phasing (MSE, SEM, SEC)
-are allowed. In practice the excluded chains (about 1.5 %) carry cysteine
+**Structure checks (`special_residues`, `contacts`, step 08).** Only the
+polymer residues of each chain are considered (ligands, waters and free amino
+acids that share the chain ID are ignored). A chain is dropped if it has a
+polymer residue that is not one of the 20 standard amino acids, not in
+`allowed` and not in `ignore` (terminal caps ACE and NH2 by default). The
+default is conservative: only the selenium variants used for phasing (MSE, SEM,
+SEC) are allowed. In practice the excluded chains (about 1.5 %) carry cysteine
 modifications that are usually crystallisation artefacts (CAS, CSO, CSX, CME,
-CSS), catalytic or cofactor lysines (LLP, KCX), N-terminal modifications (PCA,
-FME) or post-translational modifications (SEP, TPO, PTR, ALY, TYS); add any of
-them to `allowed` if they are acceptable for your use. Every pair must also
-have at least `min_residue_contacts` residue pairs with amino-acid heavy atoms
-within `cutoff` Å; this catches PISA interfaces that cannot be mapped onto the
-structure.
+CSS), catalytic or cofactor lysines (LLP, KCX), GFP-like chromophores (CRO,
+CRQ, CR2…), N-terminal modifications (PCA, FME), post-translational
+modifications (SEP, TPO, PTR, ALY, TYS), D-amino acids or unknown residues
+(UNK); add any of them to `allowed` if they are acceptable for your use. Every
+pair must also have at least `min_residue_contacts` residue pairs with polymer
+heavy atoms within `cutoff` Å; this catches PISA interfaces that cannot be
+mapped onto the structure.
 
 **Clustering (`clustering`, step 09).** Chains are clustered at eight
 identity thresholds (98 to 40 %); the clusters define the pruning groups
@@ -234,21 +249,30 @@ if its pair of chain clusters at `conflict_level` (40 % by default) is in
 contact in any downloaded assembly, because homologues above ~30–40 % identity
 tend to interact in the same way (Aloy et al., *J. Mol. Biol.* 2003); it is
 also dropped if it fails the quality thresholds of step 07, if a chain has
-forbidden residues or if the chains are closer than `min_distance` Å
-(`max_distance`, if set, keeps only near-miss pairs). One negative is kept per
-entry and sequence pair, and at most `max_per_entry` per entry, so that
-ribosomes and capsids do not dominate. Each negative gets a split for every
-scheme of step 12 (`split_c90`, `split_c80`, `split_c60`): test if a protein
-appears only in the test set or in a held-out C3 cluster, validation if a
-protein appears only in validation, training otherwise.
+forbidden residues (same rules as step 08) or if the chains are closer than
+`min_distance` Å (`max_distance`, if set, keeps only near-miss pairs). One
+negative is kept per entry and sequence pair, at most `max_per_pair_cluster`
+per pair cluster (`pair_cluster_key`, 98 % by default) across entries, so that
+complexes deposited many times do not dominate, and at most `max_per_entry` per
+entry, so that ribosomes and capsids do not either. Each negative gets a split
+for every scheme of step 12 (`split_c90`, `split_c80`, `split_c60`): test if a
+protein appears only in the test set or in a held-out C3 cluster, validation if
+a protein appears only in validation, training otherwise; negatives of the same
+pair cluster at the scheme's identity all go to the most restrictive of those
+sets, so a family is never split between training and evaluation. The step
+stops if a PISA file is missing, since that would hide contacts.
 
-**Leakage audit (step 14).** Every chain of the test buckets and of the
-validation set is searched against the training chains with the identity and
-coverage criteria of step 09. `reports/14_leakage_audit.json` gives, for each
-set, the number of leaks at its design threshold (chain level for the
-unseen-protein C3 buckets, pair level for C2 and validation), and
-`reports/14_leakage_by_threshold.tsv` the full picture at every threshold. With
-connected components all of them should be zero.
+**Leakage audit (step 14).** Chains are searched in both directions with the
+identity, coverage and E-value criteria of step 09: every test bucket against
+all training and validation pairs, the validation set of each scheme
+(`split_c90`, `split_c80`, `split_c60`) against its training pairs, and the
+hard negatives of the test set against everything else.
+`reports/14_leakage_audit.json` gives the number of leaks of each set at its
+design threshold (chain level for the unseen-protein C3 buckets, pair level for
+C2, validation and hard negatives) and `reports/14_leakage_by_threshold.tsv` the
+full picture at every threshold. With connected components all of them should
+be zero; `tests/check_outputs.py` fails otherwise. C1 is train-like by design
+and has no design threshold.
 
 ## Outputs
 
@@ -271,8 +295,10 @@ Disk space: about 25 KB of PISA JSON and 0.27 MB of mmCIF per assembly, i.e.
 - **"Output … has older modification time than input … clock skew" (WSL2).**
   The WSL2 clock can jump back after the computer sleeps. Run the same
   `snakemake` command again; it resumes from the step that stopped.
-- **Failed downloads.** Steps 01 and 04 report failed files in their manifests;
-  `snakemake --cores 8 --forcerun download_structures` retries them.
+- **Failed downloads.** Each file is retried `download_retries` times. Steps 01
+  and 04 stop if more than `max_failed_fraction` of the files still fail (run
+  the same command again to retry them; files already on disk are kept) and
+  report the remaining failures in their manifests.
 
 ## Data sources
 

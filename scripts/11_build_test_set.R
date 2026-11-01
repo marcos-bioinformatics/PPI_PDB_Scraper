@@ -6,6 +6,7 @@ source(file.path("scripts", "common.R"))
 cfg <- load_config()
 ts <- cfg$test_set
 
+if (is.null(ts$seed)) stop("test_set.seed no puede ser null: el test no sería reproducible")
 set.seed(ts$seed)
 
 # Test split protocol (C1 / C2 / C3)
@@ -66,7 +67,6 @@ C3_MULT    <- as.integer(ts$c3_mult)
 
 # C2 constraints
 C2_CHAIN_CAP_98_GLOBAL <- as.integer(ts$c2_chain_cap_98_global)
-C2_MIN_REMAIN_CHAIN    <- as.integer(ts$c2_min_remain_chain)
 
 # C2: qué fila representa a cada pair cluster y en qué orden se eligen
 #   "random" (por defecto): al azar, calidad similar a la de train
@@ -371,7 +371,7 @@ build_C3_bucket <- function(df_pool, N, chain_col_A, chain_col_B, subbucket_labe
   pool[, .freq_sum := .freqA + .freqB]
   
   setorder(pool, .freq_sum)
-  pool_small <- pool[1:min(.N, N * C3_MULT)]
+  pool_small <- pool[seq_len(min(.N, N * C3_MULT))]
   pool_small <- rank_for_test_harder(pool_small)
   
   sel <- sample_balanced_dt(pool_small, N, HOMO_FRAC, strata_cols = c("len_bin","area_bin"))
@@ -459,7 +459,7 @@ select_C2_reps_dt <- function(reps_all, n_pairs, chain_counts_global) {
       tmp_cc <- update_chain_counts(tmp_cc, r)
       if (any(tmp_cc$n > C2_CHAIN_CAP_98_GLOBAL)) next
       out <- rbindlist(list(out, r), use.names = TRUE, fill = TRUE)
-      cc  <- tmp_cc
+      cc <<- tmp_cc  # actualiza el contador de select_C2_reps_dt (no una copia local)
       if (nrow(out) >= k) break
     }
     out
@@ -565,12 +565,24 @@ df_c1_pool[is.na(.B98_n), .B98_n := 1L]
 df_c1_pool[, easy_score := .pc80_n + .A98_n + .B98_n]
 df_c1_pool <- rank_for_test_easy(df_c1_pool)
 
-df_c1_pool_pref <- df_c1_pool[1:min(.N, N_C1 * 20L)]
+df_c1_pool_pref <- df_c1_pool[seq_len(min(.N, N_C1 * 20L))]
 if (nrow(df_c1_pool_pref) < N_C1) df_c1_pool_pref <- df_c1_pool
 
 c1_selected <- sample_balanced_dt(df_c1_pool_pref, N_C1, HOMO_FRAC, strata_cols = c("len_bin","area_bin"))
 c1_selected[, `:=`(test_bucket = "C1", test_subbucket = "easy")]
 blocked_c1 <- c1_selected[, .(row_id, blocked_reason = "blocked_by_C1_test")]
+
+# Aviso si algún bucket no se ha podido llenar (pool demasiado pequeño)
+check_bucket <- function(label, got, want) {
+  if (got < want) warning(sprintf("Bucket %s: %d de %d filas pedidas", label, got, want),
+                          call. = FALSE, immediate. = TRUE)
+}
+check_bucket("unseen_chain_c40", nrow(c3_40$selected), N_C3_40)
+check_bucket("unseen_chain_c50", nrow(c3_50$selected), N_C3_50)
+for (i in seq_len(nrow(C2_PLAN))) {
+  check_bucket(C2_PLAN$subbucket[i], nrow(C2_sel_list[[C2_PLAN$subbucket[i]]]), C2_PLAN$n_pairs[i])
+}
+check_bucket("easy", nrow(c1_selected), N_C1)
 
 # =============================================================================
 # FINAL: test / blocked / trainval
@@ -590,6 +602,9 @@ df_blocked <- unique(
 )
 
 df_trainval_pool <- df0[!df_blocked, on = "row_id"]
+if (nrow(df_trainval_pool) == 0L) {
+  stop("El pool de train/val ha quedado vacío: reduce los tamaños del test (test_set)")
+}
 
 # =============================================================================
 # AUDITS
@@ -748,6 +763,15 @@ if (n_leak_exact_C2 > 0) cat("WARNING: leak exact C2 -> trainval_pool\n")
 if (any(leak_cluster_C2$n_leak_clusters > 0, na.rm = TRUE)) {
   cat("WARNING: leak pair_cluster_t C2 -> trainval_pool\n")
 }
+
+# Las columnas auxiliares de la selección no forman parte de la salida
+drop_aux <- function(DT) {
+  aux <- c(intersect("avail", names(DT)), grep("^\\.", names(DT), value = TRUE))
+  if (length(aux) > 0L) DT[, (aux) := NULL]
+  invisible(DT)
+}
+drop_aux(df_test)
+drop_aux(df_trainval_pool)
 
 fwrite(df_test,          ensure_parent(cfg$paths$test))
 fwrite(df_trainval_pool, ensure_parent(cfg$paths$trainval_pool))

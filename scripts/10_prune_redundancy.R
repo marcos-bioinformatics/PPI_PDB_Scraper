@@ -166,24 +166,17 @@ dedupe_exact_pairs <- function(df,
   
   if (mode == "none") return(df)
   
-  if (mode == "keep1") {
-    out <- df %>%
-      group_by(pair_seq_exact) %>%
-      group_modify(~ rank_quality(.x) %>% slice_head(n = 1)) %>%
-      ungroup()
-    return(out)
-  }
-  
-  out <- df %>%
+  # Una sola ordenación global por calidad (arrange es estable) y después los
+  # K primeros de cada par exacto: mismo resultado que group_modify por grupo,
+  # pero en segundos en lugar de minutos.
+  out <- rank_quality(df) %>%
     group_by(pair_seq_exact) %>%
-    group_modify(~{
-      g <- rank_quality(.x)
-      any_homo  <- any(g$is_homo01 == 1L, na.rm = TRUE)
-      any_heter <- any(g$is_homo01 == 0L, na.rm = TRUE)
-      K_keep <- if (isTRUE(any_homo)) K_homo else if (isTRUE(any_heter)) K_heter else K_heter
-      slice_head(g, n = min(K_keep, nrow(g)))
-    }) %>%
-    ungroup()
+    filter(row_number() <= if (mode == "keep1") 1L
+                           else if (any(is_homo01 == 1L, na.rm = TRUE)) K_homo
+                           else K_heter) %>%
+    ungroup() %>%
+    arrange(pair_seq_exact) %>%
+    relocate(pair_seq_exact)   # mismo orden de filas y columnas que group_modify
   
   out
 }
@@ -475,19 +468,21 @@ prune_pair_cluster_single_step_v3 <- function(df,
   
   base_cols_no_key <- setdiff(names(df), pair_key)
   
-  kept <- df %>%
+  # Solo los clusters activos pasan por group_modify; el resto se conserva tal cual
+  active_keys <- cl_stats[[pair_key]][cl_stats$active]
+  passive <- df %>%
+    filter(!(.data[[pair_key]] %in% active_keys)) %>%
+    relocate(all_of(pair_key))
+  
+  kept_active <- df %>%
+    filter(.data[[pair_key]] %in% active_keys) %>%
     left_join(cl_stats, by = setNames(pair_key, pair_key)) %>%
     group_by(.data[[pair_key]]) %>%
     group_modify(~{
       g <- .x
-      act <- isTRUE(unique(g$active)[1])
       red <- isTRUE(unique(g$redundant)[1])
       ctype <- unique(g$cluster_type)[1]
       if (length(ctype) == 0 || is.na(ctype)) ctype <- "mixed/unknown"
-      
-      if (!act) {
-        return(g %>% select(any_of(base_cols_no_key)))
-      }
       
       if (red) {
         K <- if (ctype == "homo") K_redund_homo else if (ctype == "hetero") K_redund_heter else K_redund_heter
@@ -499,6 +494,10 @@ prune_pair_cluster_single_step_v3 <- function(df,
       chosen %>% select(any_of(base_cols_no_key))
     }) %>%
     ungroup()
+  
+  # mismo orden que group_modify sobre todos los clusters (arrange es estable)
+  kept <- bind_rows(passive, kept_active) %>%
+    arrange(.data[[pair_key]])
   
   after <- kept
   
@@ -583,24 +582,28 @@ prune_pair_cluster_single_step_v3 <- function(df,
 # ============================================================
 
 # A) Pruning local en pair_cluster_98
-res98 <- prune_pair_cluster_single_step_v3(
+#    Los parámetros a null en el config no se pasan: la función usa su valor por defecto
+args98 <- list(
   df,
   pair_key = pr$pair_key,
   
   # exact dedupe
   exact_dedup_mode = pr$exact_dedup_mode,
-  exact_K_homo = as.integer(pr$exact_K_homo),
-  exact_K_heter = as.integer(pr$exact_K_heter),
+  exact_K_homo = int_or_null(pr$exact_K_homo),
+  exact_K_heter = int_or_null(pr$exact_K_heter),
   
   # pruning
-  activate_n = as.integer(pr$activate_n),
+  activate_n = int_or_null(pr$activate_n),
   area_range_pct_thr = pr$area_range_pct_thr,
   
-  K_redund_homo = as.integer(pr$K_redund_homo),
-  K_redund_heter = as.integer(pr$K_redund_heter),
-  K_var_homo = as.integer(pr$K_var_homo),
-  K_var_heter = as.integer(pr$K_var_heter)
+  K_redund_homo = int_or_null(pr$K_redund_homo),
+  K_redund_heter = int_or_null(pr$K_redund_heter),
+  K_var_homo = int_or_null(pr$K_var_homo),
+  K_var_heter = int_or_null(pr$K_var_heter)
 )
+res98 <- do.call(prune_pair_cluster_single_step_v3, args98[!vapply(args98, is.null, logical(1))])
+
+
 
 # outputs
 res98$pruning_summary

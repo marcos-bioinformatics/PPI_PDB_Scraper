@@ -9,7 +9,8 @@ Output: paths.assembly_dir/{subdir}/{id}-assembly{n}.cif.gz   every needed assem
 Only the biological assemblies that PISA analysed are downloaded. Files are
 stored gzipped, fully checked for gzip integrity when downloaded and written
 atomically; files already on disk are kept, so the step can be rerun to resume
-or to retry failures.
+or to retry failures. Failed transfers are retried (download_retries) and the
+step stops if more than max_failed_fraction of the files fail.
 
 Entry-level metadata comes from the RCSB Data API (GraphQL, batches of 1000
 IDs). The values are those of the first _exptl and _refine records of the
@@ -19,14 +20,12 @@ entry's mmCIF, so the asymmetric-unit files do not need to be downloaded.
 from __future__ import annotations
 
 import csv
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
-from tqdm import tqdm
 
-from common import (download_file, ensure_parent, get_logger, gzip_is_valid, gzip_looks_valid, make_session,
-                    parse_args, pisa_subdir, rcsb_entries)
+from common import (check_failures, download_file, ensure_parent, get_logger, gzip_is_valid, gzip_looks_valid,
+                    make_session, parse_args, pisa_subdir, rcsb_entries, run_threaded)
 
 log = get_logger("04_download_structures")
 
@@ -74,10 +73,11 @@ def main() -> None:
         tasks.append((pid, asm, f"{base_url}/{name}", asm_dir / pisa_subdir(pid) / name))
     log.info("%d assembly files needed", len(tasks))
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [(t, ex.submit(download_file, session, t[2], t[3], gzip_is_valid, exists_check=gzip_looks_valid))
-                   for t in tasks]
-        results = [(t, fut.result()) for t, fut in tqdm(futures, desc="mmCIF", unit="file")]
+    attempts = int(cfg["download_retries"])
+    statuses = run_threaded(lambda t: download_file(session, t[2], t[3], gzip_is_valid,
+                                                    exists_check=gzip_looks_valid, attempts=attempts),
+                            tasks, workers, "mmCIF")
+    results = list(zip(tasks, statuses))
 
     manifest = ensure_parent(paths["structures_manifest"])
     tmp = manifest.with_name(manifest.name + ".part")
@@ -90,8 +90,9 @@ def main() -> None:
 
     counts = pd.Series([s.split(":")[0] for _, s in results]).value_counts().to_dict()
     log.info("Download summary: %s", counts)
-    if counts.get("error") or counts.get("missing"):
-        log.warning("Some files are missing or failed (see %s); rerun this step to retry errors.", manifest)
+    if counts.get("missing"):
+        log.warning("%d assembly files do not exist at RCSB (see %s).", counts["missing"], manifest)
+    check_failures(counts.get("error", 0), len(tasks), float(cfg["max_failed_fraction"]), "mmCIF downloads", log)
 
 
 if __name__ == "__main__":

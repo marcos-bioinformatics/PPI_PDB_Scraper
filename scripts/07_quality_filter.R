@@ -240,7 +240,7 @@ df_filt <- df2 %>%
     # filtros opcionales: null en el config = desactivado
     if (is.null(qf$max_resolution)) TRUE else resolution <= qf$max_resolution,
     p_value <= qf$max_p_value,
-    exptl_method == qf$exptl_method,
+    if (is.null(qf$exptl_method)) TRUE else exptl_method == qf$exptl_method,
     molA_seq_len > qf$min_chain_length, molA_seq_len <= qf$max_chain_length,
     molB_seq_len > qf$min_chain_length, molB_seq_len <= qf$max_chain_length,
     interface_area > qf$min_interface_area,

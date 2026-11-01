@@ -327,8 +327,9 @@ audit_split <- function(DT, split_col, cluster_col, strat_col = "is_homo01") {
   )
 }
 
-df <- fread(IN_CSV)
+df <- fread(IN_CSV, na.strings = c("", "NA"))
 setDT(df)
+if (nrow(df) == 0L) stop("El pool de train/val está vacío: revisa el paso 11")
 
 stopifnot("row_id" %in% names(df))
 stopifnot(uniqueN(df$row_id) == nrow(df))

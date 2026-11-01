@@ -6,25 +6,37 @@ Run from the repository root (conda activate beastaffinity):
     snakemake --cores 8                                # run the whole pipeline
     snakemake --cores 8 --until quality_filter         # stop after a given step
     snakemake --cores 8 --config cfg=config/test.yaml  # use another config file
+    snakemake --cores 1 clustering_stats --config cfg=config/test.yaml   # targets go before --config
     snakemake --dag | dot -Tsvg > dag.svg              # draw the workflow
 
 Each rule runs one numbered script from scripts/; the scripts read all their
-parameters from the YAML config, so they can also be run by hand. When the
-config section a step uses changes, Snakemake reruns that step and everything
-downstream of it.
+parameters from the YAML config, so they can also be run by hand. A step is
+rerun when its inputs change, when the config section it uses changes, or when
+its script (or a shared helper) is edited; `snakemake --touch` marks outputs as
+up to date after cosmetic edits.
 """
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, "scripts")
 from common import load_config  # noqa: E402
 
-CFG_FILE = config.get("cfg", "config/config.yaml")
+unknown = set(config) - {"cfg"}
+if unknown:
+    raise ValueError(f"Only --config cfg=<file> is supported (got {sorted(unknown)}); "
+                     "put every parameter in the YAML file. --configfile is not used either.")
+
+CFG_FILE = os.path.normpath(config.get("cfg", "config/config.yaml"))
 C = load_config(CFG_FILE)
 P = C["paths"]
 LOGS = P["logs_dir"]
-ID_LISTS = sorted(str(p) for p in Path(C["input_dir"]).glob("*.txt*"))
+ID_LISTS = sorted(str(p) for p in Path(C["input_dir"]).iterdir() if p.name.endswith((".txt", ".txt.gz")))
+
+PY_COMMON = ["scripts/common.py"]
+STRUCT = PY_COMMON + ["scripts/structure_checks.py"]
+R_COMMON = ["scripts/common.R"]
 
 
 def py(script):
@@ -35,9 +47,9 @@ def r(script):
     return f"Rscript scripts/{script}.R {CFG_FILE} 2>&1 | tee {{log}}"
 
 
-def section(name):
-    """Config section as a string, so a change in it triggers a rerun."""
-    return str(C[name])
+def section(*names):
+    """Config sections as a string, so a change in them triggers a rerun."""
+    return str({n: C[n] for n in names})
 
 
 rule all:
@@ -51,12 +63,13 @@ rule all:
 
 rule download_pisa:
     input:
-        ID_LISTS,
+        lists=ID_LISTS,
+        code=["scripts/01_download_pisa.py"] + PY_COMMON,
     output:
         ids=P["ids"],
         manifest=P["pisa_manifest"],
     params:
-        pisa=C["pisa"]["base_url"],
+        section("pisa", "rcsb"),
     log:
         f"{LOGS}/01_download_pisa.log",
     shell:
@@ -66,6 +79,7 @@ rule download_pisa:
 rule parse_pisa:
     input:
         P["pisa_manifest"],
+        code=["scripts/02_parse_pisa.py"] + PY_COMMON,
     output:
         P["master_pisa"],
     params:
@@ -81,6 +95,7 @@ rule select_assemblies:
     input:
         P["master_pisa"],
         P["ids"],
+        code=["scripts/03_select_assemblies.R"] + R_COMMON,
     output:
         P["master_selected"],
         P["needed_pairs"],
@@ -93,6 +108,7 @@ rule select_assemblies:
 rule download_structures:
     input:
         P["needed_pairs"],
+        code=["scripts/04_download_structures.py"] + PY_COMMON,
     output:
         P["structures_manifest"],
         P["entry_metadata"],
@@ -112,6 +128,7 @@ rule audit_downloads:
         P["needed_pairs"],
         P["structures_manifest"],
         P["entry_metadata"],
+        code=["scripts/05_audit_downloads.py"] + PY_COMMON,
     output:
         P["audit"],
     log:
@@ -126,6 +143,7 @@ rule enrich_mmcif:
         P["structures_manifest"],
         P["entry_metadata"],
         P["audit"],
+        code=["scripts/06_enrich_mmcif.py"] + PY_COMMON,
     output:
         P["enriched"],
         P["chain_metadata"],
@@ -141,6 +159,7 @@ rule enrich_mmcif:
 rule quality_filter:
     input:
         P["enriched"],
+        code=["scripts/07_quality_filter.R"] + R_COMMON,
     output:
         P["quality_filtered"],
         P["quality_plots"],
@@ -156,11 +175,11 @@ rule check_structures:
     input:
         P["quality_filtered"],
         P["structures_manifest"],
+        code=["scripts/08_check_structures.py"] + STRUCT,
     output:
         P["checked"],
     params:
-        section("special_residues"),
-        section("contacts"),
+        section("special_residues", "contacts"),
     threads: C["workers"]
     log:
         f"{LOGS}/08_check_structures.log",
@@ -171,6 +190,7 @@ rule check_structures:
 rule cluster_chains:
     input:
         P["checked"],
+        code=["scripts/09_cluster_chains.py"] + PY_COMMON,
     output:
         P["clustered"],
         f"{P['clustering_dir']}/summary.json",
@@ -186,6 +206,7 @@ rule cluster_chains:
 rule prune_redundancy:
     input:
         P["clustered"],
+        code=["scripts/10_prune_redundancy.R"] + R_COMMON,
     output:
         P["pruned"],
     params:
@@ -199,6 +220,7 @@ rule prune_redundancy:
 rule build_test_set:
     input:
         P["pruned"],
+        code=["scripts/11_build_test_set.R"] + R_COMMON,
     output:
         P["test"],
         P["trainval_pool"],
@@ -213,6 +235,7 @@ rule build_test_set:
 rule trainval_splits:
     input:
         P["trainval_pool"],
+        code=["scripts/12_trainval_splits.R"] + R_COMMON,
     output:
         P["trainval_splits"],
         P["validation"],
@@ -228,16 +251,16 @@ rule hard_negatives:
     input:
         P["chain_metadata"],
         P["entry_metadata"],
+        P["pisa_manifest"],
+        P["structures_manifest"],
         P["clustered"],
         P["test"],
         P["trainval_splits"],
+        code=["scripts/13_hard_negatives.py"] + STRUCT,
     output:
         P["hard_negatives"],
     params:
-        section("hard_negatives"),
-        section("quality_filter"),
-        section("special_residues"),
-        section("contacts"),
+        section("hard_negatives", "quality_filter", "special_residues", "contacts", "splits"),
     threads: C["workers"]
     log:
         f"{LOGS}/13_hard_negatives.log",
@@ -249,10 +272,12 @@ rule leakage_audit:
     input:
         P["test"],
         P["trainval_splits"],
+        P["hard_negatives"] if C["hard_negatives"]["enabled"] else [],
+        code=["scripts/14_leakage_audit.py"] + PY_COMMON,
     output:
         P["leakage_audit"],
     params:
-        section("clustering"),
+        section("clustering", "hard_negatives"),
     threads: C["threads"]
     log:
         f"{LOGS}/14_leakage_audit.log",
@@ -265,7 +290,10 @@ rule leakage_audit:
 rule clustering_stats:
     input:
         P["clustered"],
+        code=["analysis/clustering_stats.R"] + R_COMMON,
     output:
         f"{P['reports_dir']}/clustering_stats.txt",
+    log:
+        f"{LOGS}/clustering_stats.log",
     shell:
-        f"Rscript analysis/clustering_stats.R {CFG_FILE} > {{output}} 2>&1"
+        f"Rscript analysis/clustering_stats.R {CFG_FILE} > {{output}} 2> {{log}}"

@@ -2,20 +2,22 @@ name: beastaffinity
 channels:
   - conda-forge
   - bioconda
+  - nodefaults
 dependencies:
   - python=3.11
-  - pandas>=2.1
-  - numpy
-  - biopython>=1.83
-  - requests
+  - pandas>=2.1,<4
+  - numpy>=1.26
+  - scipy>=1.11
+  - biopython>=1.83,<2
+  - requests>=2.31
   - urllib3>=2
-  - pyyaml
+  - pyyaml>=6
   - tqdm
-  - mmseqs2
-  - scipy
-  - snakemake-minimal>=8
+  - mmseqs2>=15
+  - snakemake-minimal>=8,<10
+  - graphviz                  # snakemake --dag | dot -Tsvg > dag.svg
   - r-base>=4.3
-  - r-dplyr
-  - r-tidyr
-  - r-data.table
-  - r-yaml
+  - r-dplyr>=1.1
+  - r-tidyr>=1.3
+  - r-data.table>=1.15
+  - r-yaml>=2.3

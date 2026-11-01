@@ -16,17 +16,23 @@ this order:
      length thresholds as step 07 (interface thresholds do not apply)
   4. no conflict: the pair of chain clusters (hard_negatives.conflict_level) is
      not in contact in any downloaded assembly
-  5. one negative per (entry, sequence pair)
-  6. structure: no forbidden special residues and a heavy-atom distance between
-     the chains of at least hard_negatives.min_distance (and at most
-     hard_negatives.max_distance, if set, to keep only near-miss pairs)
-  7. at most hard_negatives.max_per_entry per entry (random, seeded)
+  5. structure: no forbidden special residues (same rules as step 08) and a
+     heavy-atom distance between the chains of at least hard_negatives.min_distance
+     (and at most hard_negatives.max_distance, if set, to keep only near-miss pairs)
+  6. one negative per (entry, sequence pair)
+  7. at most hard_negatives.max_per_pair_cluster per pair cluster
+     (hard_negatives.pair_cluster_key) across entries, then at most
+     hard_negatives.max_per_entry per entry (random, seeded)
 Split, for every split scheme of step 12 (split_c90, split_c80, split_c60):
 "test" if a chain appears only in test positives or belongs to a cluster held
 out for the unseen-chain (C3) buckets; else "val" if a chain appears only in
-validation positives of that scheme; else "train". Proteins shared by train
-and test (as in the train-like C1 bucket) do not pull a negative into the test
-set. The column `split` repeats the scheme chosen in splits.validation_split.
+validation positives of that scheme; else "train". Negatives of the same pair
+cluster at the scheme's identity (e.g. pair_cluster_c90 for split_c90) all get
+the most restrictive split of the group (test > val > train), so a family of
+negatives is never split between sets. Proteins shared by train and test (as
+in the train-like C1 bucket) do not pull a negative into the test set. The
+column `split` repeats the scheme chosen in splits.validation_split.
+Missing or unreadable PISA files stop the step (they would hide contacts).
 """
 
 from __future__ import annotations
@@ -41,42 +47,40 @@ import pandas as pd
 from tqdm import tqdm
 
 from common import ensure_parent, get_logger, parse_args, pisa_subdir, read_json, seq_uid, write_json
-from structure_checks import contact_summary, heavy_atoms, load_model, special_residues
+from structure_checks import contact_summary, load_chains, special_residues
 
 log = get_logger("13_hard_negatives")
 
 
-def pisa_contacts(task: Tuple[str, int, str]) -> Tuple[str, int, List[Tuple[str, str]]]:
-    """Protein chain pairs with any PISA interface in one assembly."""
+def pisa_contacts(task: Tuple[str, int, str]) -> Tuple[str, int, List[Tuple[str, str]], str]:
+    """Protein chain pairs with any PISA interface in one assembly (and an error, if any)."""
     pdb_id, asm, path = task
-    if not Path(path).is_file():
-        return pdb_id, asm, []
-    data = read_json(path)
-    block = (data.get(pdb_id, data) or {}).get("assembly") or {}
-    out = []
-    for itf in block.get("interfaces") or []:
-        mols = [m for m in itf.get("molecules") or [] if str(m.get("molecule_class", "")).lower() == "protein"]
-        if len(mols) == 2:
-            out.append(tuple(sorted((str(mols[0]["chain_id"]), str(mols[1]["chain_id"])))))
-    return pdb_id, asm, out
+    try:
+        data = read_json(path)
+        block = (data.get(pdb_id, data) or {}).get("assembly") or {}
+        out = []
+        for itf in block.get("interfaces") or []:
+            mols = [m for m in itf.get("molecules") or [] if str(m.get("molecule_class", "")).lower() == "protein"]
+            if len(mols) == 2:
+                out.append(tuple(sorted((str(mols[0]["chain_id"]), str(mols[1]["chain_id"])))))
+        return pdb_id, asm, out, ""
+    except Exception as exc:  # reported by main(): a missing file would hide contacts
+        return pdb_id, asm, [], f"{path}: {type(exc).__name__}: {exc}"
 
 
 def check_assembly(task: Dict[str, Any]) -> List[Dict[str, Any]]:
+    needed = {c for pair in task["pairs"] for c in pair}
     try:
-        model = load_model(task["path"])
+        chains = load_chains(task["path"], needed)
     except Exception:  # unreadable file: its candidates are dropped
         return []
-    atoms, special_ok = {}, {}
-    for chain_id in {c for pair in task["pairs"] for c in pair}:
-        if chain_id in model:
-            special_ok[chain_id] = not special_residues(model[chain_id], task["allowed"])[1]
-            atoms[chain_id] = heavy_atoms(model[chain_id])
+    special_ok = {c: not special_residues(chains[c], task["allowed"], task["ignore"])[1] for c in chains}
     out = []
     for a, b in task["pairs"]:
         if special_ok.get(a) and special_ok.get(b):
             out.append({"pdb_id": task["pdb_id"], "assembly_id": task["assembly_id"],
                         "molA_chain_id": a, "molB_chain_id": b,
-                        **contact_summary(atoms[a], atoms[b], task["cutoff"])})
+                        **contact_summary(chains[a], chains[b], task["cutoff"])})
     return out
 
 
@@ -111,9 +115,16 @@ def main() -> None:
     assemblies = sorted(set(zip(chains["pdb_id"], chains["assembly_id"])))
     tasks = [(p, a, str(pisa_dir / pisa_subdir(p) / f"{p}_assembly{a}_interfaces.json.gz")) for p, a in assemblies]
     contacts: Dict[Tuple[str, int], Set[Tuple[str, str]]] = {}
+    errors = []
     with ProcessPoolExecutor(max_workers=workers) as ex:
-        for p, a, pairs in tqdm(ex.map(pisa_contacts, tasks, chunksize=200), total=len(tasks), desc="PISA contacts"):
+        for p, a, pairs, err in tqdm(ex.map(pisa_contacts, tasks, chunksize=200), total=len(tasks),
+                                     desc="PISA contacts"):
             contacts[(p, a)] = set(pairs)
+            if err:
+                errors.append(err)
+    if errors:
+        raise SystemExit(f"{len(errors)} PISA files are missing or unreadable (e.g. {errors[0]}); "
+                         "rerun step 01 (snakemake --forcerun download_pisa).")
     touching = set()
     for (p, a), pairs in contacts.items():
         for x, y in pairs:
@@ -153,24 +164,19 @@ def main() -> None:
     cand = cand[ok.fillna(False)]
     counts["after_quality"] = len(cand)
 
-    # --- 4) conflicts and 5) one per (entry, sequence pair)
+    # --- 4) conflicts
     keys = [tuple(sorted((conflict_key(a), conflict_key(b)))) for a, b in zip(cand["uidA"], cand["uidB"])]
     cand = cand[[k not in touching for k in keys]]
     counts["after_conflicts"] = len(cand)
-    cand = cand.assign(_pair=[tuple(sorted(x)) for x in zip(cand["uidA"], cand["uidB"])],
-                       _cov=cand[[f"molA_{qf['coverage_metric']}", f"molB_{qf['coverage_metric']}"]].min(axis=1))
-    cand = (cand.sort_values(["pdb_id", "_cov", "assembly_id", "molA_chain_id", "molB_chain_id"],
-                             ascending=[True, False, True, True, True])
-                .drop_duplicates(["pdb_id", "_pair"]))
-    counts["after_dedup_per_entry"] = len(cand)
 
-    # --- 6) structure checks: special residues and minimum distance
+    # --- 5) structure checks: special residues and minimum distance
     asm_dir = Path(paths["assembly_dir"])
     allowed = {x.upper() for x in cfg["special_residues"]["allowed"]}
+    ignore = {x.upper() for x in cfg["special_residues"].get("ignore", [])}
     by_asm = defaultdict(list)
     for p, a, ca, cb in cand[["pdb_id", "assembly_id", "molA_chain_id", "molB_chain_id"]].itertuples(index=False):
         by_asm[(p, a)].append((ca, cb))
-    tasks = [{"pdb_id": p, "assembly_id": a, "pairs": prs, "allowed": allowed,
+    tasks = [{"pdb_id": p, "assembly_id": a, "pairs": prs, "allowed": allowed, "ignore": ignore,
               "cutoff": float(cfg["contacts"]["cutoff"]),
               "path": str(asm_dir / pisa_subdir(p) / f"{p}-assembly{a}.cif.gz")}
              for (p, a), prs in sorted(by_asm.items())]
@@ -187,19 +193,31 @@ def main() -> None:
         cand = cand[cand["min_interchain_distance"] <= float(hn["max_distance"])]
     counts["after_min_distance"] = len(cand)
 
-    # --- 7) cap per entry
-    cand = (cand.sample(frac=1.0, random_state=int(hn["seed"]))
-                .groupby("pdb_id", sort=False).head(int(hn["max_per_entry"]))
-                .sort_values(["pdb_id", "assembly_id", "molA_chain_id", "molB_chain_id"]))
-    counts["final"] = len(cand)
+    # --- 6) one negative per (entry, sequence pair): the best-covered copy
+    cand = cand.assign(_pair=[tuple(sorted(x)) for x in zip(cand["uidA"], cand["uidB"])],
+                       _cov=cand[[f"molA_{qf['coverage_metric']}", f"molB_{qf['coverage_metric']}"]].min(axis=1))
+    cand = (cand.sort_values(["pdb_id", "_cov", "assembly_id", "molA_chain_id", "molB_chain_id"],
+                             ascending=[True, False, True, True, True])
+                .drop_duplicates(["pdb_id", "_pair"]))
+    counts["after_dedup_per_entry"] = len(cand)
 
-    # --- clusters and split
+    # --- clusters of both chains and of the pair
     for side, u in (("molA", "uidA"), ("molB", "uidB")):
         for t in tags:
             cand[f"{side}_cluster_{t}"] = cand[u].map(cluster_of[t])
     for t in tags:
         a, b = cand[f"molA_cluster_{t}"], cand[f"molB_cluster_{t}"]
         cand[f"pair_cluster_{t}"] = a.where(a <= b, b) + "||" + b.where(a <= b, a)
+
+    # --- 7) caps across entries (same complex deposited many times) and per entry
+    seed = int(hn["seed"])
+    cand = (cand.sample(frac=1.0, random_state=seed)
+                .groupby(f"pair_cluster_{hn['pair_cluster_key']}", sort=False).head(int(hn["max_per_pair_cluster"])))
+    counts["after_cap_per_pair_cluster"] = len(cand)
+    cand = (cand.sample(frac=1.0, random_state=seed)
+                .groupby("pdb_id", sort=False).head(int(hn["max_per_entry"]))
+                .sort_values(["pdb_id", "assembly_id", "molA_chain_id", "molB_chain_id"]))
+    counts["final"] = len(cand)
 
     test = pd.read_csv(paths["test"], keep_default_na=False, na_values=[""], low_memory=False)
     tv = pd.read_csv(paths["trainval_splits"], keep_default_na=False, na_values=[""], low_memory=False)
@@ -216,14 +234,20 @@ def main() -> None:
 
     held = [any(cluster_of[t].get(u) in held_out[t] for t in held_out for u in (a, b))
             for a, b in zip(cand["uidA"], cand["uidB"])]
+    rank = {"train": 0, "val": 1, "test": 2}
     schemes = [c for c in tv.columns if c.startswith("split_")]
     for scheme in schemes:
         val_uids, train_uids = uids(tv[tv[scheme] == "val"]), uids(tv[tv[scheme] == "train"])
         test_only = test_uids - train_uids - val_uids
         val_only = val_uids - train_uids - test_uids
-        cand[scheme] = ["test" if h or a in test_only or b in test_only
-                        else "val" if a in val_only or b in val_only else "train"
-                        for a, b, h in zip(cand["uidA"], cand["uidB"], held)]
+        row_split = pd.Series(["test" if h or a in test_only or b in test_only
+                               else "val" if a in val_only or b in val_only else "train"
+                               for a, b, h in zip(cand["uidA"], cand["uidB"], held)], index=cand.index)
+        group_col = f"pair_cluster_{scheme.removeprefix('split_')}"
+        if group_col in cand.columns:  # whole pair-cluster families go to the most restrictive set
+            worst = row_split.map(rank).groupby(cand[group_col]).transform("max")
+            row_split = worst.map({v: k for k, v in rank.items()})
+        cand[scheme] = row_split
         counts.update({f"{scheme}_{k}": int(v) for k, v in cand[scheme].value_counts().items()})
     cand["split"] = cand[split_col]
     cand.insert(4, "label", 0)

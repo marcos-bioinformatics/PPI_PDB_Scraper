@@ -12,16 +12,19 @@ pair when both are proteins and
     p_value        <= pisa.max_p_value          (PISA Delta-iG P-value, 0-1)
 These are permissive pre-filters (they decide which structures are downloaded);
 the final thresholds are applied in step 07 and can only be stricter.
-Assembly-level metrics come from {id}_assembly{n}.json.gz.
+Assembly-level metrics come from the assembly block of the same file.
 """
 
 from __future__ import annotations
 
 import csv
+import math
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import zlib
 
 import pandas as pd
 from tqdm import tqdm
@@ -76,15 +79,14 @@ def assembly_record(path: Path, pdb_id: str) -> Tuple[Optional[Dict[str, Any]], 
 
 
 def parse_assembly(task) -> Tuple[List[Dict[str, Any]], Counter, Optional[str]]:
-    pdb_id, asm, itf_path, asm_path, min_area, max_p = task
+    pdb_id, asm, itf_path, min_area, max_p = task
     stats: Counter = Counter()
     try:
         itf_block, version = assembly_record(Path(itf_path), pdb_id)
         if itf_block is None:
             return [], stats, f"{itf_path}\tno assembly block"
         stats[f"pisa_version={version}"] += 1
-        metrics = assembly_record(Path(asm_path), pdb_id)[0] or itf_block
-        asm_cols = {f"assembly_{k}": metrics.get(k) for k in ASSEMBLY_KEYS}
+        asm_cols = {f"assembly_{k}": itf_block.get(k) for k in ASSEMBLY_KEYS}
 
         rows: List[Dict[str, Any]] = []
         for itf in itf_block.get("interfaces") or []:
@@ -97,7 +99,7 @@ def parse_assembly(task) -> Tuple[List[Dict[str, Any]], Counter, Optional[str]]:
                 stats["dropped_not_two_molecules"] += 1
             elif len(proteins) != 2:
                 stats["dropped_not_protein_protein"] += 1
-            elif area is None or p_value is None or not 0.0 <= p_value <= 1.0:
+            elif area is None or p_value is None or not math.isfinite(area) or not 0.0 <= p_value <= 1.0:
                 stats["dropped_missing_or_invalid_values"] += 1
             elif area < min_area:
                 stats["dropped_interface_area"] += 1
@@ -128,7 +130,7 @@ def parse_assembly(task) -> Tuple[List[Dict[str, Any]], Counter, Optional[str]]:
                     "source_file": itf_path,
                 })
         return rows, stats, None
-    except (OSError, EOFError, ValueError, AttributeError) as exc:
+    except (OSError, EOFError, ValueError, AttributeError, TypeError, zlib.error) as exc:
         return [], stats, f"{itf_path}\t{type(exc).__name__}: {exc}"
 
 
@@ -142,10 +144,7 @@ def main() -> None:
     manifest = manifest[manifest["status"] == "ok"]
     tasks = []
     for pid, asm in zip(manifest["pdb_id"], manifest["assembly_id"].astype(int)):
-        folder = pisa_dir / pisa_subdir(pid)
-        tasks.append((pid, asm,
-                      str(folder / f"{pid}_assembly{asm}_interfaces.json.gz"),
-                      str(folder / f"{pid}_assembly{asm}.json.gz"),
+        tasks.append((pid, asm, str(pisa_dir / pisa_subdir(pid) / f"{pid}_assembly{asm}_interfaces.json.gz"),
                       float(pisa["min_interface_area"]), float(pisa["max_p_value"])))
     log.info("Parsing %d assemblies", len(tasks))
 

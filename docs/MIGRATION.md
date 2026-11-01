@@ -61,6 +61,7 @@ To reproduce Seq8 exactly, set these values in `config/config.yaml`:
 | Parameter | v1 default | Seq8 |
 |---|---|---|
 | `quality_filter.max_chain_length` | 600 | 900 (the saved script said 800) |
+| `quality_filter.min_chain_length` | 39 (at least 40 residues) | 12 (at least 13) |
 | `quality_filter.max_solvation_density` | null (off) | -0.0068 |
 | `enrichment.homo_similarity` | on an alignment | positional identity, no alignment |
 | `clustering.method` | `connected_components` | `set_cover` |
@@ -107,6 +108,57 @@ which removes them by construction.
 7. **Test set (step 11).** `setorder()` referred to `.easy_score` instead of
    `easy_score`, so the saved script stopped with an error.
 8. Row order is now deterministic in every Python step.
+
+## Deep audit (1 November 2026)
+
+Four independent reviews of v1 (acquisition, structure and science,
+clustering and orchestration, R scripts) were followed by these changes; the
+pipeline was then rerun from a clean clone and checked with
+`tests/check_outputs.py`.
+
+- **Selenocysteine / pyrrolysine (step 06).** `U` and `O` are not in BLOSUM62
+  and crashed the alignment of any hetero pair containing them (e.g. 1cc1).
+- **Special residues (steps 08, 13; inherited from Seq8).** Residues were
+  classified by name with Biopython's `is_aa`, which mixes polymer and ligands:
+  free ligands such as SAH, SEP or ORN excluded chains, while GFP chromophores,
+  UNK and D-amino acids in the polymer were not detected and selenocysteine was
+  never counted. Only polymer residues (`label_seq_id`) are now used, for the
+  classification and for the contacts; ACE/NH2 caps are ignored.
+- **C2 chain cap (step 11; inherited from Seq8).** `cc <- tmp_cc` inside
+  `pick_group()` updated a local copy, so the one-use-per-protein cap was not
+  enforced between homo and hetero picks: 25 proteins appeared twice in the Seq8
+  C2 buckets and 21 of 100 C2-c70 pairs had a protein that no longer appeared in
+  training. Fixed with `<<-`; on the Seq8 data both counts drop to 0.
+- **Short chains.** Peptides cannot reach the MMseqs2 E-value, so near-identical
+  short chains escaped the homology clustering; the default minimum length is
+  now 40 residues.
+- **Downloads.** Transfers cut mid-way are retried, a corrupt gzip is
+  downloaded again, GraphQL queries are retried, steps 01/04 stop when too many
+  files fail, PISA files updated by PDBe are refreshed, the redundant
+  `{id}_assembly{n}.json` is no longer downloaded (half of the PISA requests),
+  and ID lists with BOM, UTF-16, quotes, semicolons or entity IDs (`4HHB_1`) are
+  read correctly. Obsolete entries are reported as such.
+- **Hard negatives (step 13).** Missing PISA files stop the step instead of
+  hiding contacts; structure checks run before the per-entry de-duplication;
+  negatives are capped per pair cluster across entries; splits are assigned per
+  pair-cluster family.
+- **Leakage audit (step 14).** Searches in both directions, compares the test
+  set with training and validation, audits every split scheme and the hard
+  negatives.
+- **Snakemake.** Scripts are declared as inputs (code changes trigger reruns),
+  step 01 reruns when its config sections change, step 13 declares its PISA and
+  structure inputs, and unsupported `--config`/`--configfile` options stop the
+  run instead of being ignored. YAML values such as `1e-3` are read as numbers in
+  both Python and R.
+- **Step 10 performance.** The exact-pair cap and the cluster pruning were
+  rewritten with one global ranking instead of one `group_modify` call per
+  group: 39 s instead of 9-17 min on the Seq8 data, with an output identical to
+  the Seq8 `pruned98` table (same rows, order and values).
+- **Other R fixes.** `null` pruning parameters fall back to the function
+  defaults, `test_set.seed: null` and an empty training pool stop with an
+  error, under-filled test buckets print a warning, helper columns are no longer
+  written, empty strings are read as NA in step 12, and `exptl_method: null`
+  disables the method filter.
 
 ## R scripts
 
