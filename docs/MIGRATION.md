@@ -64,6 +64,8 @@ To reproduce Seq8 exactly, set these values in `config/config.yaml`:
 | `quality_filter.max_solvation_density` | null (off) | -0.0068 |
 | `enrichment.homo_similarity` | on an alignment | positional identity, no alignment |
 | `clustering.method` | `connected_components` | `set_cover` |
+| `test_set.c2_pick` | `random` | `worst` (lowest-quality pair of each cluster) |
+| `hard_negatives.conflict_level` | `c40` | — (new in v1) |
 
 `quality_filter.coverage_metric: internal_coverage` and `quality_filter.max_resolution`
 are new options, off by default.

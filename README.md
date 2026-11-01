@@ -190,23 +190,57 @@ values; for a strictly non-redundant set, set every `K` to 1.
 `compare_pair_cluster_95` additionally prints a broader pruning in
 `pair_cluster_95` for comparison.
 
-**Test set and splits (`test_set`, `splits`, steps 11–12).** C1 rows are
-train-like, C2 rows are new pairings of known proteins (pair clusters at 70 and
-80 %), C3 rows contain proteins unseen in training (chain clusters at 40 and
-50 %). Train/validation splits are made by pair cluster, stratified by
-homo/hetero, with a family weight of 1/√(cluster size).
+**Test set (`test_set`, step 11).** The external test set has three kinds
+of buckets, built in this order and removed from the training pool:
+
+- **C3, unseen proteins** (`n_c3_40`, `n_c3_50`): pairs whose two chains belong
+  to rare chain clusters at 40 % (then 50 %) identity. Every row of the
+  training pool that contains one of those clusters is removed, so both
+  proteins are new to the model at that identity. The candidates are the
+  `c3_mult` × N rows of the rarest families, sampled at random within strata.
+- **C2, new pairs of known proteins** (`n_c2_c70`, `n_c2_c80`): one pair per
+  pair cluster at 70 % (80 %) identity, where both chains also appear in other
+  pairs; the whole pair cluster and the identical sequence pairs are removed
+  from training, and each chain cluster (98 %) is used at most
+  `c2_chain_cap_98_global` times. `c2_pick` chooses the pair that represents its
+  cluster: `random` (default; quality similar to training), `best` or `worst`
+  (Seq8 used `worst`, which gave a test set of lower coverage and specificity
+  than the training data and mixed structure quality with novelty).
+- **C1, train-like** (`n_c1`): pairs from the most populated families; only the
+  selected rows are removed, so close homologues remain in training. C1
+  measures in-distribution performance and is expected to show leakage in
+  step 14.
+
+Every bucket is stratified by length and interface-area bins (`nbins_len`,
+`nbins_area`) and forced to `homo_frac` homodimers (0.5 by default, while 70–80 %
+of the pairs are homo), so report metrics separately for homo and hetero
+pairs.
+
+**Train/validation splits (`splits`, step 12).** The remaining pool is split
+three times, by pair cluster at 90, 80 and 60 % identity (`split_c90`,
+`split_c80`, `split_c60`), sending `val_frac` of the rows to validation with
+the same homo/hetero proportion. Splitting by pair cluster means that a
+protein can appear in training and validation, but never with a homologous
+partner: the validation sets measure generalisation to new pairs, increasingly
+distant from the training pairs. `family_weight_c90` (1/√ of the size of the
+pair cluster at 90 % in training) can be used to down-weight large families.
+`validation_split` selects the scheme exported as `validation.csv`.
 
 **Hard negatives (`hard_negatives`, step 13).** Two protein chains of the
 same biological assembly with no PISA interface between them. Homo pairs are
 excluded by default (a copy of a protein not touching another copy usually
 contradicts a homo interface elsewhere in the complex). A negative is dropped
-if its pair of chain clusters (`conflict_level`) is in contact in any
-downloaded assembly, if it fails the quality thresholds of step 07, if a chain
-has forbidden residues or if the chains are closer than `min_distance` Å. One
-negative is kept per entry and sequence pair, and at most `max_per_entry` per
-entry, so that ribosomes and capsids do not dominate. Each negative inherits
-the split of its proteins (test if any chain is in the test set or in a
-held-out C3 cluster).
+if its pair of chain clusters at `conflict_level` (40 % by default) is in
+contact in any downloaded assembly, because homologues above ~30–40 % identity
+tend to interact in the same way (Aloy et al., *J. Mol. Biol.* 2003); it is
+also dropped if it fails the quality thresholds of step 07, if a chain has
+forbidden residues or if the chains are closer than `min_distance` Å
+(`max_distance`, if set, keeps only near-miss pairs). One negative is kept per
+entry and sequence pair, and at most `max_per_entry` per entry, so that
+ribosomes and capsids do not dominate. Each negative gets a split for every
+scheme of step 12 (`split_c90`, `split_c80`, `split_c60`): test if a protein
+appears only in the test set or in a held-out C3 cluster, validation if a
+protein appears only in validation, training otherwise.
 
 **Leakage audit (step 14).** Every chain of the test buckets and of the
 validation set is searched against the training chains with the identity and

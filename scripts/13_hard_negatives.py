@@ -17,13 +17,16 @@ this order:
   4. no conflict: the pair of chain clusters (hard_negatives.conflict_level) is
      not in contact in any downloaded assembly
   5. one negative per (entry, sequence pair)
-  6. structure: no forbidden special residues and a minimum heavy-atom distance
-     between the chains of hard_negatives.min_distance
+  6. structure: no forbidden special residues and a heavy-atom distance between
+     the chains of at least hard_negatives.min_distance (and at most
+     hard_negatives.max_distance, if set, to keep only near-miss pairs)
   7. at most hard_negatives.max_per_entry per entry (random, seeded)
-Split: "test" if a chain appears only in test positives or belongs to a cluster
-held out for the unseen-chain (C3) buckets; else "val" if a chain appears only
-in validation positives; else "train". Proteins shared by train and test (as in
-the train-like C1 bucket) do not pull a negative into the test set.
+Split, for every split scheme of step 12 (split_c90, split_c80, split_c60):
+"test" if a chain appears only in test positives or belongs to a cluster held
+out for the unseen-chain (C3) buckets; else "val" if a chain appears only in
+validation positives of that scheme; else "train". Proteins shared by train
+and test (as in the train-like C1 bucket) do not pull a negative into the test
+set. The column `split` repeats the scheme chosen in splits.validation_split.
 """
 
 from __future__ import annotations
@@ -180,6 +183,8 @@ def main() -> None:
     cand = cand.merge(geo, on=["pdb_id", "assembly_id", "molA_chain_id", "molB_chain_id"], how="inner")
     counts["after_special_residues"] = len(cand)
     cand = cand[cand["min_interchain_distance"] >= float(hn["min_distance"])]
+    if hn.get("max_distance") is not None:
+        cand = cand[cand["min_interchain_distance"] <= float(hn["max_distance"])]
     counts["after_min_distance"] = len(cand)
 
     # --- 7) cap per entry
@@ -203,27 +208,26 @@ def main() -> None:
     def uids(df: pd.DataFrame) -> Set[str]:
         return set(df["molA_seq"].map(seq_uid)) | set(df["molB_seq"].map(seq_uid))
 
-    test_uids, val_uids, train_uids = uids(test), uids(tv[tv[split_col] == "val"]), uids(tv[tv[split_col] == "train"])
+    test_uids = uids(test)
     held_out = {t: set() for t in ("c40", "c50") if t in cluster_of}
     for t in held_out:
         c3 = test[test["test_subbucket"] == f"unseen_chain_{t}"]
         held_out[t] = {cluster_of[t].get(u) for u in uids(c3)} - {None}
 
-    test_only = test_uids - train_uids - val_uids
-    val_only = val_uids - train_uids - test_uids
-
-    def assign(ua: str, ub: str) -> str:
-        if ua in test_only or ub in test_only or any(
-                cluster_of[t].get(u) in held_out[t] for t in held_out for u in (ua, ub)):
-            return "test"
-        if ua in val_only or ub in val_only:
-            return "val"
-        return "train"
-
-    cand["split"] = [assign(a, b) for a, b in zip(cand["uidA"], cand["uidB"])]
+    held = [any(cluster_of[t].get(u) in held_out[t] for t in held_out for u in (a, b))
+            for a, b in zip(cand["uidA"], cand["uidB"])]
+    schemes = [c for c in tv.columns if c.startswith("split_")]
+    for scheme in schemes:
+        val_uids, train_uids = uids(tv[tv[scheme] == "val"]), uids(tv[tv[scheme] == "train"])
+        test_only = test_uids - train_uids - val_uids
+        val_only = val_uids - train_uids - test_uids
+        cand[scheme] = ["test" if h or a in test_only or b in test_only
+                        else "val" if a in val_only or b in val_only else "train"
+                        for a, b, h in zip(cand["uidA"], cand["uidB"], held)]
+        counts.update({f"{scheme}_{k}": int(v) for k, v in cand[scheme].value_counts().items()})
+    cand["split"] = cand[split_col]
     cand.insert(4, "label", 0)
     cand = cand.drop(columns=["uidA", "uidB", "_pair", "_cov"])
-    counts.update({f"split_{k}": int(v) for k, v in cand["split"].value_counts().items()})
 
     dest = ensure_parent(paths["hard_negatives"])
     tmp = dest.with_name(dest.name + ".part")

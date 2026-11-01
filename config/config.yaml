@@ -118,6 +118,7 @@ test_set:
   c3_mult: 12
   c2_chain_cap_98_global: 1
   c2_min_remain_chain: 1
+  c2_pick: random              # C2 representative of each pair cluster: random, best or worst quality (Seq8: worst)
 
 # --- 12 Train/validation splits (R) ------------------------------------------
 splits:
@@ -131,9 +132,11 @@ splits:
 hard_negatives:
   enabled: true
   include_homo: false          # also identical-sequence pairs (usually contradict a homo contact)
-  conflict_level: c95          # drop a negative if its pair of chain clusters (c98, c95, ... or
-                               # "exact" sequences) is in contact in any downloaded assembly
+  conflict_level: c40          # drop a negative if its pair of chain clusters (c98, c95, ... c40 or
+                               # "exact" sequences) is in contact in any downloaded assembly; homologues
+                               # above ~30-40 % identity tend to interact in the same way
   min_distance: 6.0            # minimum heavy-atom distance between the two chains (A)
+  max_distance: null           # optional maximum (A), e.g. 12 to keep only near-miss pairs
   max_per_entry: 5             # random sample per PDB entry (large complexes would dominate)
   seed: 13
 

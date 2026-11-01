@@ -44,9 +44,9 @@ set.seed(ts$seed)
 INPUT_CSV <- cfg$paths$pruned
 
 # ---------------------------------------------------------------------------
-# Split total = 800
-#   C3 = 100 + 100 = 200
-#   C2 = 100 + 100 + 100 = 300
+# Tamaños del test (config test_set; por defecto 700 filas en total)
+#   C3 = 100 (c40) + 100 (c50) = 200
+#   C2 = 100 (c70) + 100 (c80) = 200
 #   C1 = 300
 # ---------------------------------------------------------------------------
 N_C3_40 <- as.integer(ts$n_c3_40)
@@ -67,6 +67,12 @@ C3_MULT    <- as.integer(ts$c3_mult)
 # C2 constraints
 C2_CHAIN_CAP_98_GLOBAL <- as.integer(ts$c2_chain_cap_98_global)
 C2_MIN_REMAIN_CHAIN    <- as.integer(ts$c2_min_remain_chain)
+
+# C2: qué fila representa a cada pair cluster y en qué orden se eligen
+#   "random" (por defecto): al azar, calidad similar a la de train
+#   "best": mejor calidad primero; "worst": peor calidad primero (criterio de Seq8)
+C2_PICK <- if (is.null(ts$c2_pick)) "random" else ts$c2_pick
+stopifnot(C2_PICK %in% c("random", "best", "worst"))
 
 # =============================================================================
 # INPUT
@@ -277,6 +283,30 @@ rank_for_test_harder <- function(DT) {
   x
 }
 
+rank_for_test_best <- function(DT) {
+  x <- copy(DT)
+  add_quality_cols_dt(x)
+  # Mejor calidad primero
+  setorder(
+    x,
+    -.cov_min_pct,
+    -.cov_min_frac,
+    .p_value_num,
+    .r_free_num,
+    .res_num,
+    -.area_num
+  )
+  drop_quality_cols_dt(x)
+  x
+}
+
+rank_for_c2 <- function(DT) {
+  switch(C2_PICK,
+         worst  = rank_for_test_harder(DT),
+         best   = rank_for_test_best(DT),
+         random = DT[sample(.N)])
+}
+
 rank_for_test_easy <- function(DT) {
   x <- copy(DT)
   add_quality_cols_dt(x)
@@ -400,7 +430,7 @@ build_reps_for_threshold_dt <- function(df_pool_in, pair_col, subbucket_label, c
     df_elig <- df_elig[!(A_cluster_98 %chin% over | B_cluster_98 %chin% over)]
   }
   
-  reps <- rank_for_test_harder(df_elig)
+  reps <- rank_for_c2(df_elig)
   reps <- reps[, .SD[1], by = pair_col]
   reps[, `:=`(test_bucket = "C2", test_subbucket = subbucket_label)]
   
@@ -410,7 +440,7 @@ build_reps_for_threshold_dt <- function(df_pool_in, pair_col, subbucket_label, c
 select_C2_reps_dt <- function(reps_all, n_pairs, chain_counts_global) {
   if (nrow(reps_all) == 0L) return(reps_all[0])
   
-  cand <- rank_for_test_harder(reps_all)
+  cand <- rank_for_c2(reps_all)
   
   want_homo  <- floor(n_pairs * HOMO_FRAC)
   want_heter <- n_pairs - want_homo
