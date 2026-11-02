@@ -35,7 +35,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
-from common import ensure_parent, get_logger, parse_args, seq_uid, write_json
+from common import ensure_parent, get_logger, homology_linked, parse_args, seq_uid, write_json
 
 log = get_logger("14_leakage_audit")
 
@@ -60,12 +60,7 @@ def search(query: Dict[str, str], target: Dict[str, str], work: Path, ccfg: Dict
     hits = pd.read_csv(work / "hits.m8", sep="\t", header=None, dtype={0: str, 1: str},
                        names=["query", "target", "fident", "qcov", "tcov"])
     shutil.rmtree(work)
-    c = float(ccfg["coverage"])
-    # step 09 links with -c/--cov-mode: both coverages for cov_mode 0, the target's for
-    # cov_mode 1 and the query's for cov_mode 2; searching both ways makes 1 and 2 symmetric
-    covered = (hits["qcov"] >= c) & (hits["tcov"] >= c) if int(ccfg["cov_mode"]) == 0 else \
-              (hits["qcov"] >= c) | (hits["tcov"] >= c)
-    return hits.loc[covered, ["query", "target", "fident"]]
+    return hits.loc[homology_linked(hits, ccfg), ["query", "target", "fident"]]
 
 
 def uid_pairs(df: pd.DataFrame) -> List[Tuple[str, str]]:

@@ -79,10 +79,12 @@ clustering:
   method: connected_components
   thresholds: [0.98, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40]
   coverage: 0.90               # alignment coverage required to link two sequences
-  cov_mode: 1                  # MMseqs2 --cov-mode (1 = coverage of the target)
+  cov_mode: 1                  # 0: both chains covered; 1/2: either (pairs are searched both ways);
+                               # passed to MMseqs2 --cov-mode by set_cover
   search_sensitivity: 7.5      # connected_components: MMseqs2 -s (higher finds more remote homologues)
   evalue: 1.0e-3               # MMseqs2 -e; very short chains cannot reach it (hence min_chain_length)
-  max_seqs: 1000               # connected_components: candidate hits kept per sequence
+  max_seqs: 20000              # candidate hits kept per sequence; must exceed the largest family
+                               # (antibody chains: thousands) or links are lost and clusters leak
   engine: cluster              # set_cover: "cluster" (sensitive) or "linclust" (fast)
 
 # --- 10 Redundancy pruning (R) -----------------------------------------------
@@ -145,6 +147,9 @@ hard_negatives:
   max_per_pair_cluster: 4      # at most this many negatives per pair cluster across entries
   pair_cluster_key: c98        # (the same complex deposited many times would dominate)
   max_per_entry: 5             # random sample per PDB entry (large complexes would dominate)
+  family_level: c40            # negatives of the same pair cluster at this level share one split
+                               # (in every scheme); match conflict_level so test negatives have no
+                               # homologue in training at that identity
   seed: 13
 
 # --- File layout -------------------------------------------------------------

@@ -166,7 +166,8 @@ identity thresholds (98 to 40 %); the clusters define the pruning groups
 clusters at 70 and 80 %) and the C3 buckets (chain clusters at 40 and 50 %).
 The default method, `connected_components`, runs one all-vs-all MMseqs2 search
 and links two sequences when their identity is above the threshold with the
-required alignment coverage; clusters are the connected components (single
+required alignment coverage in either search direction (the same rule as the
+leakage audit); clusters are the connected components (single
 linkage). This guarantees that no two sequences of different clusters are
 similar above the threshold, so splits made by cluster do not leak homologues;
 the price is that large families can merge into big clusters (at 40 %, the
@@ -258,8 +259,8 @@ entry, so that ribosomes and capsids do not either. Each negative gets a split
 for every scheme of step 12 (`split_c90`, `split_c80`, `split_c60`): test if a
 protein appears only in the test set or in a held-out C3 cluster, validation if
 a protein appears only in validation, training otherwise; negatives of the same
-pair cluster at the scheme's identity all go to the most restrictive of those
-sets, so a family is never split between training and evaluation. The step
+pair cluster at `family_level` (40 %, the conflict level) all go to the most
+restrictive of those sets, so a family is never split between training and evaluation. The step
 stops if a PISA file is missing, since that would hide contacts.
 
 **Leakage audit (step 14).** Chains are searched in both directions with the

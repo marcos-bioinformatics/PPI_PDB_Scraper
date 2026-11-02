@@ -36,7 +36,7 @@ import pandas as pd
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
-from common import ensure_parent, get_logger, parse_args, seq_uid
+from common import ensure_parent, get_logger, homology_linked, parse_args, seq_uid
 
 log = get_logger("09_cluster_chains")
 
@@ -61,19 +61,20 @@ def mmseqs_version() -> str:
 
 
 def all_vs_all_hits(fasta: Path, work_dir: Path, ccfg: Dict, threads: int) -> pd.DataFrame:
-    """MMseqs2 search of every sequence against all, down to the lowest threshold."""
+    """MMseqs2 search of every sequence against all, down to the lowest threshold.
+    Coverage is applied afterwards with the same rule as the leakage audit (14)."""
     if work_dir.exists():
         shutil.rmtree(work_dir)
     work_dir.mkdir(parents=True)
     hits = work_dir / "hits.m8"
     run(["mmseqs", "easy-search", str(fasta), str(fasta), str(hits), str(work_dir / "tmp"),
-         "--min-seq-id", str(min(ccfg["thresholds"])), "-c", str(ccfg["coverage"]),
-         "--cov-mode", str(ccfg["cov_mode"]), "-e", str(ccfg["evalue"]), "-s", str(ccfg["search_sensitivity"]),
-         "--max-seqs", str(ccfg["max_seqs"]), "--threads", str(threads),
-         "--format-output", "query,target,fident"])
-    df = pd.read_csv(hits, sep="\t", header=None, names=["query", "target", "fident"], dtype={"query": str, "target": str})
+         "--min-seq-id", str(min(ccfg["thresholds"])), "-c", "0", "-e", str(ccfg["evalue"]),
+         "-s", str(ccfg["search_sensitivity"]), "--max-seqs", str(ccfg["max_seqs"]), "--threads", str(threads),
+         "--format-output", "query,target,fident,qcov,tcov"])
+    df = pd.read_csv(hits, sep="\t", header=None, names=["query", "target", "fident", "qcov", "tcov"],
+                     dtype={"query": str, "target": str})
     shutil.rmtree(work_dir)
-    return df
+    return df.loc[homology_linked(df, ccfg), ["query", "target", "fident"]]
 
 
 def components_tsv(uids: List[str], hits: pd.DataFrame, thr: float, out_dir: Path) -> Path:

@@ -141,7 +141,7 @@ pipeline was then rerun from a clean clone and checked with
 - **Hard negatives (step 13).** Missing PISA files stop the step instead of
   hiding contacts; structure checks run before the per-entry de-duplication;
   negatives are capped per pair cluster across entries; splits are assigned per
-  pair-cluster family.
+  pair-cluster family at 40 % (`hard_negatives.family_level`, the conflict level).
 - **Leakage audit (step 14).** Searches in both directions, compares the test
   set with training and validation, audits every split scheme and the hard
   negatives.

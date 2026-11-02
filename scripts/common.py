@@ -157,6 +157,18 @@ def seq_uid(seq: str) -> str:
     return hashlib.sha1(seq.encode("utf-8")).hexdigest()[:16]
 
 
+def homology_linked(hits, ccfg: Dict[str, Any]):
+    """Boolean mask of MMseqs2 hits (columns qcov, tcov; searched with -c 0) that
+    meet clustering.coverage. Shared by steps 09 and 14 so that clustering and
+    audit link the same pairs. cov_mode 0 needs both coverages; cov_mode 1
+    (target) and 2 (query) need either, because every pair is searched both ways
+    and MMseqs2 may keep only a shorter local alignment in one direction."""
+    c = float(ccfg["coverage"])
+    if int(ccfg["cov_mode"]) == 0:
+        return (hits["qcov"] >= c) & (hits["tcov"] >= c)
+    return (hits["qcov"] >= c) | (hits["tcov"] >= c)
+
+
 def pisa_subdir(pdb_id: str) -> str:
     """PDBe splits its archives by the two middle characters (1abc -> 'ab')."""
     return pdb_id[1:3]

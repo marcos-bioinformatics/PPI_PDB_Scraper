@@ -27,9 +27,9 @@ Split, for every split scheme of step 12 (split_c90, split_c80, split_c60):
 "test" if a chain appears only in test positives or belongs to a cluster held
 out for the unseen-chain (C3) buckets; else "val" if a chain appears only in
 validation positives of that scheme; else "train". Negatives of the same pair
-cluster at the scheme's identity (e.g. pair_cluster_c90 for split_c90) all get
-the most restrictive split of the group (test > val > train), so a family of
-negatives is never split between sets. Proteins shared by train and test (as
+cluster at hard_negatives.family_level (c40 by default) all get the most
+restrictive split of the group (test > val > train), so a family of negatives
+is never split between sets. Proteins shared by train and test (as
 in the train-like C1 bucket) do not pull a negative into the test set. The
 column `split` repeats the scheme chosen in splits.validation_split.
 Missing or unreadable PISA files stop the step (they would hide contacts).
@@ -235,6 +235,9 @@ def main() -> None:
     held = [any(cluster_of[t].get(u) in held_out[t] for t in held_out for u in (a, b))
             for a, b in zip(cand["uidA"], cand["uidB"])]
     rank = {"train": 0, "val": 1, "test": 2}
+    group_col = f"pair_cluster_{hn['family_level']}"
+    if group_col not in cand.columns:
+        raise SystemExit(f"hard_negatives.family_level must be one of {', '.join(tags)}")
     schemes = [c for c in tv.columns if c.startswith("split_")]
     for scheme in schemes:
         val_uids, train_uids = uids(tv[tv[scheme] == "val"]), uids(tv[tv[scheme] == "train"])
@@ -243,10 +246,9 @@ def main() -> None:
         row_split = pd.Series(["test" if h or a in test_only or b in test_only
                                else "val" if a in val_only or b in val_only else "train"
                                for a, b, h in zip(cand["uidA"], cand["uidB"], held)], index=cand.index)
-        group_col = f"pair_cluster_{scheme.removeprefix('split_')}"
-        if group_col in cand.columns:  # whole pair-cluster families go to the most restrictive set
-            worst = row_split.map(rank).groupby(cand[group_col]).transform("max")
-            row_split = worst.map({v: k for k, v in rank.items()})
+        # whole pair-cluster families go to the most restrictive set
+        worst = row_split.map(rank).groupby(cand[group_col]).transform("max")
+        row_split = worst.map({v: k for k, v in rank.items()})
         cand[scheme] = row_split
         counts.update({f"{scheme}_{k}": int(v) for k, v in cand[scheme].value_counts().items()})
     cand["split"] = cand[split_col]
