@@ -1,5 +1,13 @@
 # PPI_PDB_Scrapper
 
+> **About this project.** PPI_PDB_Scrapper is an independent, personal project.
+> I conceived it and developed it by hand over 2025 and early 2026, to have a
+> reliable source of protein–protein interface structures for training models
+> related to protein function. Once the method was mature, I audited it in
+> depth with Claude and rebuilt it as a reproducible Snakemake workflow, so that
+> the whole dataset can be regenerated from a list of PDB IDs and a single
+> configuration file. I am now sharing it with the community.
+
 A reproducible methodology to scrape **protein–protein interfaces (PPIs) from the
 Protein Data Bank** and turn them into a curated, non-redundant dataset for
 machine learning. It combines PDBe-PISA interface energetics with structural
