@@ -32,7 +32,7 @@ na_report_nonzero <- na_report[n_na > 0]
 print(na_report_nonzero)
 
 # ----------------------------
-# 2) Summary para cuantitativas
+# 2) Summary para  variables cuantitativas
 # ----------------------------
 # Detecta numéricas (incluye integer/numeric)
 num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
@@ -76,10 +76,8 @@ cols_clave <- c("molA_coverage","molB_coverage","r_free","exptl_method",
 df2 <- df %>%
   filter(if_all(all_of(cols_clave), ~ !is.na(.)))
 
-# ESTUDIO DE CUANTILES ENERGETICOS
 
-library(dplyr)
-library(tidyr)
+# ESTUDIO DE CUANTILES ENERGETICOS
 
 # -----------------------------
 # Helper: coerción robusta de is_homo
@@ -307,9 +305,6 @@ hist(df_filt$solvation_density,
 
 par(mfrow = c(1, 1))  # reset
 
-library(data.table)
-
-# df <- fread("tu_csv.csv")
 df = df_filt
 
 # ---------
@@ -376,8 +371,6 @@ hetero_lengths <- c(df[is_homo_bool == FALSE, molA_seq_len],
 
 cat("\n=== HETERO (cadenas individuales) ===\n")
 print(summ_len(hetero_lengths))
-
-
 
 
 
