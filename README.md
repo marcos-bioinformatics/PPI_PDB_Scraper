@@ -66,6 +66,10 @@ Python steps do the heavy extraction (downloads, JSON and mmCIF parsing,
 geometry, clustering); R steps take the data-analysis decisions (filters,
 pruning, splits).
 
+![The 14 steps of PPI_PDB_Scrapper: four phases, the scripts they run (Python in blue, R in purple) and which step reads the files of which](docs/pipeline.png)
+
+*Each box is a Snakemake rule with the script it runs; an arrow goes from a step to every step that reads one of its files, and the dotted lines mark the steps that read a section of `config/config.yaml`.*
+
 | Step | Script | What it does | Main output |
 |---|---|---|---|
 | 01 | `01_download_pisa.py` | Reads the ID lists; downloads PISA JSON from PDBe | `raw/pisa/` |
@@ -85,16 +89,6 @@ pruning, splits).
 
 `analysis/clustering_stats.R` is an optional exploratory report on the clusters
 (`snakemake --cores 1 clustering_stats`).
-
-```mermaid
-flowchart LR
-  ids[RCSB ID lists] --> s01[01 PISA download] --> s02[02 parse PISA] --> s03[03 select assemblies]
-  s03 --> s04[04 mmCIF download] --> s05[05 audit] --> s06[06 enrich]
-  s06 --> s07[07 quality filter] --> s08[08 structure checks] --> s09[09 MMseqs2]
-  s09 --> s10[10 prune] --> s11[11 test set] --> s12[12 train/val splits] --> s13[13 hard negatives]
-  s13 --> s14[14 leakage audit]
-  s12 --> s14
-```
 
 ## Installation
 
