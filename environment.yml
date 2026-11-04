@@ -1,4 +1,4 @@
-name: beastaffinity
+name: ppi_pdb_scrapper
 channels:
   - conda-forge
   - bioconda

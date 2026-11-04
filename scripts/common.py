@@ -1,4 +1,4 @@
-"""Shared helpers for the BeastAffinity pipeline scripts.
+"""Shared helpers for the PPI_PDB_Scrapper pipeline scripts.
 
 Every numbered script imports this module (it lives next to them in
 ``scripts/``), so configuration loading, PDB ID handling, HTTP downloads and
@@ -237,7 +237,7 @@ def json_is_valid(path: Path) -> bool:
 # -----------------------------------------------------------------------------
 # HTTP
 # -----------------------------------------------------------------------------
-def make_session(pool_size: int, user_agent: str = "BeastAffinity-pipeline/1.0") -> requests.Session:
+def make_session(pool_size: int, user_agent: str = "PPI_PDB_Scrapper/1.0") -> requests.Session:
     retries = Retry(
         total=6,
         backoff_factor=1.0,

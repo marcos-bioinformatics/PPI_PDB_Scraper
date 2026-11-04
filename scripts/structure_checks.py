@@ -11,7 +11,7 @@ count as special residues nor create contacts.
   chromophores (CRO, ...) and post-translational modifications.
 - Contacts: heavy-atom contacts between two chains with a KD-tree. The
   neighbour search is adapted from NeighborSearch.py (pairs_within_cutoff) and
-  the heavy-atom criterion from Test_distance.py of the BeastAffinity ML code.
+  the heavy-atom criterion from Test_distance.py of the PPI_PDB_Scrapper ML code.
 """
 
 from __future__ import annotations

@@ -27,9 +27,9 @@ Starting from any list of PDB IDs exported from the RCSB Advanced Search, it:
 7. adds **hard negatives**: chains of the same complex that are not in contact;
 8. audits the homology leakage between training and every evaluation set.
 
-The project was developed as *BeastAffinity* (working versions Seq5–Seq8,
-2025–2026); [docs/MIGRATION.md](docs/MIGRATION.md) describes how this version
-relates to them and which bugs were fixed on the way.
+This is version 1 of PPI_PDB_Scrapper. It succeeds the working versions
+PPI_PDB_Scrapper Seq5–Seq8 (2025–2026); [docs/MIGRATION.md](docs/MIGRATION.md)
+describes how this version relates to them and which bugs were fixed on the way.
 
 ## A full run
 
@@ -92,7 +92,7 @@ flowchart LR
 
 ```bash
 conda env create -f environment.yml
-conda activate beastaffinity
+conda activate ppi_pdb_scrapper
 ```
 
 The environment provides Python 3.11, R ≥ 4.3 (dplyr, tidyr, data.table, yaml),

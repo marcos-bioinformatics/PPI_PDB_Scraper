@@ -1,7 +1,7 @@
-# From BeastAffinitySeq8 to v1
+# From PPI_PDB_Scrapper Seq8 to v1
 
 This repository is the cleaned-up, reproducible version of the working pipeline
-used to build the BeastAffinitySeq8 dataset (developed August 2025 – March
+used to build the PPI_PDB_Scrapper Seq8 dataset (developed August 2025 – March
 2026). The scientific design and the order of the steps are unchanged; what
 changed is how the steps are wired together, plus a few bug fixes.
 

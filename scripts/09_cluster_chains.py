@@ -11,7 +11,7 @@ clustering.method:
         coverage criterion holds, and clusters are the connected components
         (single linkage). No two sequences of different clusters are similar
         above the threshold, so cluster-based splits do not leak homologues.
-  set_cover  MMseqs2 cluster/linclust as in BeastAffinitySeq8: every member is
+  set_cover  MMseqs2 cluster/linclust as in PPI_PDB_Scrapper Seq8: every member is
         similar to its representative, but members of different clusters can be
         similar above the threshold.
 

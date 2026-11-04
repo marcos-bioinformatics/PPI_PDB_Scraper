@@ -1,6 +1,6 @@
-"""BeastAffinity pipeline.
+"""PPI_PDB_Scrapper pipeline.
 
-Run from the repository root (conda activate beastaffinity):
+Run from the repository root (conda activate ppi_pdb_scrapper):
 
     snakemake -n                                       # dry run: show what would run
     snakemake --cores 8                                # run the whole pipeline

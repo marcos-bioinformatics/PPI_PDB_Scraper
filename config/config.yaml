@@ -1,5 +1,5 @@
 # =============================================================================
-# BeastAffinity pipeline configuration
+# PPI_PDB_Scrapper pipeline configuration
 #
 # Every step (Python and R) reads its parameters from this file, so this is
 # the only place you need to edit. Paths are relative to the repository root.
