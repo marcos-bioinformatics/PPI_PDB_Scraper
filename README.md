@@ -418,3 +418,8 @@ Disk space: about 25 KB of PISA JSON and 0.27 MB of mmCIF per assembly, i.e.
 On 21 July 2027 the wwPDB switches to extended PDB IDs (`pdb_` + 8 characters)
 and a reorganised archive. Version 2 will accept both ID formats and use the new
 archive layout. See [docs/MIGRATION.md](docs/MIGRATION.md) for the history of the pipeline.
+
+## License
+
+The code is released under the [MIT License](LICENSE). Data downloaded by the
+pipeline keep the terms of their sources (RCSB PDB and PDBe).
