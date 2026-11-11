@@ -1,6 +1,6 @@
-# PPI_PDB_Scrapper
+# PPI_PDB_Scraper
 
-> **About this project.** PPI_PDB_Scrapper is an independent, personal project.
+> **About this project.** PPI_PDB_Scraper is an independent, personal project.
 > I conceived it and developed it by hand over 2025 and early 2026, to have a
 > reliable source of protein–protein interface structures for training models
 > related to protein function. Once the method was mature, I audited it in
@@ -21,91 +21,129 @@ Starting from any list of PDB IDs exported from the RCSB Advanced Search, it:
 1. downloads the PISA interface analysis of every entry from PDBe and keeps the
    protein–protein interfaces as candidate chain pairs;
 2. downloads only the biological-assembly mmCIF files those pairs need, plus
-   entry metadata (method, resolution, R-free) from the RCSB Data API;
-3. annotates every pair with chain sequences, coverage, homo/hetero status and
-   experimental quality, with descriptive statistics and plots of every variable;
+   entry metadata (method, resolution, R-free, release dates, revision),
+   membrane and antibody annotations and UniProt accessions from the RCSB Data API;
+3. annotates every pair with chain sequences, coverage, homomeric/heteromeric
+   status and experimental quality, with descriptive statistics and plots;
 4. applies **crystallographic and physicochemical QC** (method, R-free,
    coverage, chain length, buried interface area, PISA ΔiG P-value) and
    **structural QC** in the coordinates (non-standard residues, real atomic
-   contacts between the two chains);
-5. clusters all chains with MMseqs2 at eight identity thresholds (98–40 %) by
-   connected components, so that cluster-based splits do not leak homologues;
-6. prunes redundancy, builds a three-level test set (C1 train-like, C2 new pairs
-   of known proteins, C3 unseen proteins) and cluster-aware train/val splits;
-7. adds **hard negatives**: chains of the same complex that are not in contact;
-8. audits the homology leakage between training and every evaluation set.
+   contacts, clashes);
+5. removes small interfaces that **PRODIGY-cryst**, a classifier independent of
+   PISA, calls crystal contacts;
+6. clusters all chains with MMseqs2 at several identity thresholds (95–30 %)
+   by connected components, so that cluster-based splits do not leak
+   homologues;
+7. caps redundant copies, builds a test set with the three classes of Park and
+   Marcotte (C1 new pairs of seen proteins, C2 one unseen protein, C3 unseen
+   proteins) and cluster-aware train/val splits with family weights;
+8. adds **hard negatives** (chains of the same complex that are not in contact)
+   and checks each of them against **IntAct**, dropping any with evidence of a
+   direct interaction;
+9. audits the homology leakage between training and every evaluation set.
 
-This is version 1 of PPI_PDB_Scrapper. It succeeds the working versions
-PPI_PDB_Scrapper Seq5–Seq8 (2025–2026); [docs/MIGRATION.md](docs/MIGRATION.md)
-describes how this version relates to them and which bugs were fixed on the way.
+Every curation decision, with its reason, precedents, effect and biases, is in
+[docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## A full run
 
-Validation run of 2 November 2026 on 164,000 X-ray entries (resolution ≤ 3.0 Å),
-on a laptop under WSL2 (20 cores, 14 GB RAM):
+Run of 10 November 2026 on 164,000 X-ray entries (resolution ≤ 3.0 Å), on a
+laptop under WSL2 (20 cores, 14 GB RAM):
 
 | Stage | Result |
 |---|---|
-| PISA (step 01–02) | 245,760 assemblies, 564,350 interfaces → **204,078 candidate pairs** from 69,581 entries |
-| Structures (step 04) | 93,029 assembly mmCIF files, 0 failed downloads |
-| Quality filter (step 07) | 152,106 pairs |
-| Structure checks (step 08) | 141,523 pairs (33,641 unique chain sequences) |
-| Redundancy pruning (step 10) | 43,164 pairs |
-| Final dataset | **41,837 train/val pairs** (37,652 / 4,185 in `split_c90`), **700 test pairs**, **717 hard negatives**, from 29,164 entries |
-| Leakage audit (step 14) | **0 leaks** in the 8 audited sets |
-| Time | 8.8 h: PISA download 6 h 03 min, mmCIF download 1 h 22 min, everything else ~1.4 h |
-| Disk | `raw/` 27 GB, `interim/` 1.3 GB, `processed/` 129 MB |
+| PISA (steps 01–02) | 245,757 assemblies, 564,347 interfaces → **204,075 candidate pairs** from 69,580 entries |
+| First assembly (step 03) | 155,899 pairs from 66,807 entries |
+| Structures (step 04) | 66,807 assembly mmCIF files, 0 failed downloads |
+| Quality filter (step 07) | 118,044 pairs (3,032 with a membrane-protein chain excluded) |
+| Structure checks (step 08) | 109,825 pairs |
+| Small interfaces (step 08b) | 4,487 of the 15,798 pairs below 1,000 Å² called crystal by PRODIGY-cryst and removed → 105,338 pairs (31,677 unique chain sequences) |
+| Redundancy (step 10) | 43,656 pairs after the cap on identical sequence pairs |
+| Final dataset | **39,866 train/val pairs** (35,877 / 3,989 in `split_c40`), **750 test pairs** (C1 150, C2 300, C3 300), **492 hard negatives**, from 33,074 entries |
+| Leakage audit (step 14) | **0 leaks by sequence** in the 11 audited sets |
+| PRODIGY-cryst (optional) | 98.5 % of the 40,601 scored final positives called biological (95.0 % without step 08b) |
+| Time | about 2 h 20 min with the files already on disk (steps 01–07 58 min, 08b 29 min, the other steps of 08–14 about 52 min); PRODIGY-cryst annotation 55 min |
+| Disk | `raw/` 27 GB (it still holds every assembly of the run of 2 November; about 20 GB for a fresh run), `interim/` 1.2 GB, `processed/` 113 MB |
 
-Downloads take 84 % of the time; once `raw/` exists, changing a threshold
-reruns only the affected steps (minutes). In the final dataset 74.9 % of the
-train/val pairs are *gold* (P-value < 0.2) and 74.6 % are homodimers.
+A run from scratch also downloads the PISA files and the structures: in the
+run of 2 November 2026 that took 6 h 03 min for PISA and 1 h 22 min for
+93,029 assembly files (every assembly, the default then; the first assembly
+only needs 66,807). In the final dataset 75.6 % of the train/val pairs are
+*gold* (P-value < 0.2) and 79.7 % are homomeric.
 
 ## Pipeline
 
 Python steps do the heavy extraction (downloads, JSON and mmCIF parsing,
-geometry, clustering); R steps take the data-analysis decisions (filters,
+geometry, clustering); R steps make the data-analysis decisions (filters,
 pruning, splits).
 
-![The 14 steps of PPI_PDB_Scrapper: four phases, the scripts they run (Python in blue, R in purple) and which step reads the files of which](docs/pipeline.png)
+![The steps of PPI_PDB_Scraper (01–14 and 08b): four phases, the scripts they run (Python in blue, R in purple) and which step reads the files of which](docs/pipeline.png)
 
-*Each box is a Snakemake rule with the script it runs; an arrow goes from a step to every step that reads one of its files, and the dotted lines mark the steps that read a section of `config/config.yaml`.*
+*Each numbered step is a Snakemake rule with the script it runs; an arrow goes from a step to every step that reads one of its files, and the dotted lines mark the steps that read a section of `config/config.yaml`.*
 
 | Step | Script | What it does | Main output |
 |---|---|---|---|
 | 01 | `01_download_pisa.py` | Reads the ID lists; downloads PISA JSON from PDBe | `raw/pisa/` |
 | 02 | `02_parse_pisa.py` | One row per protein pair in each PISA interface | `02_master_pisa.csv` |
-| 03 | `03_select_assemblies.R` | Restricts to the ID list; lists the assemblies needed | `03_needed_pairs.csv` |
-| 04 | `04_download_structures.py` | Downloads the needed assembly mmCIF files; entry metadata from the RCSB Data API | `raw/assemblies/`, `04_entry_metadata.csv` |
+| 03 | `03_select_assemblies.R` | Restricts to the ID list and, by default, to the first assembly of each entry; lists the assemblies needed | `03_needed_pairs.csv` |
+| 04 | `04_download_structures.py` | Downloads the needed assembly mmCIF files; entry and entity metadata from the RCSB Data API | `raw/assemblies/`, `04_entry_metadata.csv`, `04_entity_metadata.csv` |
 | 05 | `05_audit_downloads.py` | Checks that every needed file is on disk | `05_audit_downloads.json` |
-| 06 | `06_enrich_mmcif.py` | Sequences, coverage, homo/hetero, method, resolution, R-free | `06_enriched.csv` |
-| 07 | `07_quality_filter.R` | Descriptive analysis + quality filter + gold/silver tier | `07_quality_filtered.csv` |
+| 06 | `06_enrich_mmcif.py` | Sequences, coverage, homomeric/heteromeric, method, resolution, R-free | `06_enriched.csv` |
+| 07 | `07_quality_filter.R` | Descriptive analysis + scope and quality filter + gold/silver tier | `07_quality_filtered.csv` |
 | 08 | `08_check_structures.py` | Drops chains with non-standard amino acids and pairs without atomic contacts | `08_checked.csv` |
-| 09 | `09_cluster_chains.py` | MMseqs2 chain clustering at 98–40 % identity (connected components) | `09_clustered.csv` |
-| 10 | `10_prune_redundancy.R` | Exact-duplicate soft cap + pruning in `pair_cluster_98` | `10_pruned.csv` |
-| 11 | `11_build_test_set.R` | Test set: C1 (train-like), C2 (new pairs), C3 (unseen proteins) | `processed/test.csv` |
+| 08b | `08b_prodigy_filter.py` | Drops the pairs below 1,000 Å² that PRODIGY-cryst calls crystal contacts (own environment; `prodigy.filter: false` skips it) | `08b_checked.csv` |
+| 09 | `09_cluster_chains.py` | MMseqs2 chain clustering at 95–30 % identity (connected components) | `09_clustered.csv` |
+| 10 | `10_prune_redundancy.R` | Cap on identical sequence pairs (optional pair-cluster pruning) | `10_pruned.csv` |
+| 11 | `11_build_test_set.R` | Test set: C1 (new pairs), C2 (one unseen protein), C3 (unseen proteins) | `processed/test.csv` |
 | 12 | `12_trainval_splits.R` | Cluster-aware train/val splits and family weights | `processed/trainval_splits.csv`, `processed/validation.csv` |
-| 13 | `13_hard_negatives.py` | Non-contacting chain pairs of the same assembly, assigned to splits | `processed/hard_negatives.csv` |
-| 14 | `14_leakage_audit.py` | Homology leakage of each test bucket and of validation against training | `reports/14_leakage_audit.json` |
+| 13 | `13_hard_negatives.py` | Non-contacting chain pairs of the same assembly, checked against IntAct and assigned to splits | `processed/hard_negatives.csv` |
+| 14 | `14_leakage_audit.py` | Homology leakage of each test class, the validation sets and the test negatives | `reports/14_leakage_audit.json` |
 
-`analysis/clustering_stats.R` is an optional exploratory report on the clusters
-(`snakemake --cores 1 clustering_stats`).
+Optional analyses (not run by default): `prodigy_cryst` annotates every final
+positive with PRODIGY-cryst, `leakage_control` audits the splits with an
+independent measure (see below) and `clustering_stats` reports on the clusters.
 
-## Installation
+## Requirements and installation
+
+Linux x86-64 (or WSL2 on Windows), [conda](https://conda-forge.org/download/)
+or miniforge, about 20 GB of disk for the reference dataset (0.5 GB for the
+quick test) and network access to PDBe and RCSB (and to IntAct for step 13).
+R, MMseqs2 and Snakemake are installed by conda.
 
 ```bash
+git clone https://github.com/marcos-bioinformatics/PPI_PDB_Scraper.git
+cd PPI_PDB_Scraper
 conda env create -f environment.yml
-conda activate ppi_pdb_scrapper
+conda activate ppi_pdb_scraper
 ```
 
 The environment provides Python 3.11, R ≥ 4.3 (dplyr, tidyr, data.table, yaml),
-MMseqs2, Snakemake and graphviz.
+MMseqs2, Snakemake and graphviz. `environment.yml` gives version ranges;
+`environment.lock.yml` gives the exact versions the reference run used
+(`conda env create -f environment.lock.yml`), and every run records its
+software versions in `reports/provenance.json`.
+
+Step 08b runs PRODIGY-cryst, which needs Python 3.8 and scikit-learn 0.22, in a
+second environment (or set `prodigy.filter: false` to skip it):
+
+```bash
+conda env create -f envs/prodigy_cryst.yml
+conda run -n prodigy_cryst pip install --no-deps prodigy-cryst==1.0.1
+```
+
+The optional independent leakage control has its own environment too
+(`conda env create -f envs/leakage_control.yml`).
 
 ## Usage
 
 1. Run a query in the [RCSB Advanced Search](https://www.rcsb.org/search/advanced),
    click **Download IDs** and put the `.txt` file(s) in `pdb_ids/`. The query
-   decides the scope of the dataset (method, resolution, date…).
-2. Review the parameters in `config/config.yaml` (every threshold lives there).
+   decides the scope of the dataset (method, resolution, date…). Write the query
+   (its JSON file or URL) and the date in `scope.input_query` and
+   `scope.input_query_date`: they are copied to `reports/provenance.json` with a
+   checksum of every ID list. `pdb_ids/` holds the 17 lists of the reference run.
+2. Review the parameters in `config/config.yaml` (every threshold lives there;
+   [docs/METHODS.md](docs/METHODS.md) explains them).
 3. Run the pipeline from the repository root:
 
 ```bash
@@ -116,229 +154,83 @@ snakemake --cores 8       # run everything
 Useful Snakemake commands:
 
 ```bash
-snakemake --cores 8 --until quality_filter           # stop after step 07
-snakemake --cores 8 --forcerun download_structures   # rerun a step (e.g. retry failed downloads)
-snakemake --cores 8 --config cfg=config/test.yaml    # use another config file
-snakemake --cores 1 clustering_stats --config cfg=config/test.yaml  # a target goes before --config
-snakemake --cores 1 --touch --until check_structures # mark steps 01-08 as up to date without running them
-snakemake --dag | dot -Tsvg > dag.svg                # draw the workflow
+snakemake --cores 8 --until quality_filter            # stop after step 07
+snakemake --cores 8 --forcerun download_structures    # rerun a step (e.g. retry failed downloads)
+snakemake --cores 8 --config cfg=config/test.yaml     # use another config file
+snakemake --cores 20 leakage_control                  # an optional analysis (a target goes before --config)
+snakemake --cores 8 --touch --until check_structures  # mark steps 01-08 as up to date without running them
+snakemake --dag | dot -Tsvg > dag.svg                 # draw the workflow
 ```
 
 Snakemake only reruns what is missing or out of date. Each rule receives the
 config sections it uses as `params` and declares its script (and the shared
-`common.py` / `common.R`) as inputs, so changing a section of the config (for
-instance `quality_filter`) or editing a script repeats that step and everything
-downstream of it. Editing `scripts/common.py` therefore reruns the whole
-pipeline, downloads included; after a change that does not affect the early
-steps, `snakemake --touch --until <rule>` marks them as up to date. All
-parameters live in the YAML file: `--config` only accepts `cfg=<file>`, and
-`--configfile` is not used. A config can inherit from another one with
-`base: config/config.yaml`. Every script can also be run by hand from the
-repository root, e.g. `python scripts/06_enrich_mmcif.py --config config/config.yaml`
-or `Rscript scripts/07_quality_filter.R config/config.yaml`.
+`common.py` / `common.R`) as inputs, so changing a section of the config or
+editing a script repeats that step and everything downstream of it. Editing
+`scripts/common.py` therefore reruns the whole pipeline, downloads included;
+after a change that does not affect the early steps, `snakemake --touch --until
+<rule>` marks them as up to date. A config can inherit from another one with
+`base: config/config.yaml`; `--config` only accepts `cfg=<file>`. Every script
+can also be run by hand from the repository root, e.g.
+`python scripts/06_enrich_mmcif.py --config config/config.yaml` or
+`Rscript scripts/07_quality_filter.R config/config.yaml`.
 
 ### Quick test
 
 `config/test.yaml` runs the whole pipeline on the 1,500 IDs in `tests/pdb_ids/`
-(about 0.5 GB of downloads, ~6 minutes) into `data_test/`:
+(about 0.5 GB of downloads) into `data_test/`. It needs the `prodigy_cryst`
+environment too.
 
 ```bash
 snakemake --cores 8 --config cfg=config/test.yaml
 python tests/check_outputs.py --config config/test.yaml   # consistency and leakage checks
 ```
 
-`tests/check_outputs.py` runs 21 checks on the final tables (sizes, duplicates,
-test/train overlap, lengths, contacts, labels and the 8 leakage sets) and
-fails if any of them does not hold.
+Step 11 warns that C1 has 6 of the 10 requested pairs: the test IDs are too few
+to fill it. `tests/check_outputs.py` runs 25 checks on the final tables (sizes,
+duplicates, test/train overlap, lengths, contacts, labels, the PRODIGY-cryst
+filter and the 11 leakage sets) and fails if any of them does not hold.
 
-## Methodology and parameters
+## Clustering and leakage: a project-specific choice
 
-Every threshold is in `config/config.yaml`. Most of them are a matter of what
-the dataset is for; the notes below explain what each group means and why the
-defaults are what they are.
+How strictly training and evaluation data must be separated depends on what a
+model has to generalise to, so these criteria are a choice of each project, not
+a property of the data. The defaults follow common practice:
+two chains are linked when MMseqs2 aligns them at the threshold identity with
+an alignment that covers at least 90 % of either chain; clusters are the
+connected components; the test classes and the `split_c40` validation are
+separated at 40 % identity (the AlphaFold 3 low-homology level) and `split_c60`
+at 60 %.
 
-**PISA pre-filter (`pisa`, step 02).** PISA reports `interface_area` as the
-solvent-accessible area buried *per side* (half of the total buried surface),
-so 800 Å² means about 1,600 Å² buried in total, above the typical range of
-crystal-packing contacts. `p_value` is PISA's ΔiG P-value: the probability of
-finding a more hydrophobic patch of the same size by chance; values below 0.5
-suggest an interaction-specific interface. PISA-lite does not provide the
-complexation significance score (CSS) of classic PISA, so specificity relies
-on area, P-value and solvation energy, with thresholds chosen by the pipeline.
-These two values are only a pre-filter (they decide which structures are
-downloaded); the final thresholds are set in `quality_filter` and can only be
-stricter. Only the assemblies an entry has today are used
-(`only_current_assemblies`): the PDBe dump can keep assemblies removed in later
-revisions, and entries that RCSB no longer serves are listed as obsolete. PDBe
-recomputes PISA when an entry is revised, so a rerun of step 01 downloads again
-any file that PDBe has updated since the previous run.
+What the defaults guarantee: no evaluation chain or pair has a homologue in its
+reference data *by this criterion* (step 14; `tests/check_outputs.py` fails
+otherwise). What they do not: chains linked only through a shorter alignment, by
+structure or below 30 % identity. `analysis/leakage_control.py` measures the
+first kind with global alignments (EMBOSS needleall, as GraphPart) and two
+identity definitions: *A*, identical positions over the alignment length
+(GraphPart), and *B*, over the length of the evaluation chain (AlphaFold 3),
+counted only with a significant local alignment. Most leaks by A are the same
+protein with a different construct (expression tags, linkers, termini), which
+the 90 % coverage rule does not link; leaks by B are shared domains. The
+coverage is the main lever:
 
-**Quality filter (`quality_filter`, step 07).** Experimental method, R-free,
-optional maximum resolution, minimum coverage of both chains, chain length
-range, interface area range and P-value. Method and resolution are often
-already restricted by the RCSB query (the reference dataset uses X-ray
-structures up to 3.0 Å); cryo-EM entries are excluded by design because they
-have no R-free. `coverage_metric` chooses between `coverage` (resolved / SEQRES
-residues) and `internal_coverage` (resolved residues between the first and the
-last resolved one): with the latter, disordered expression tags and tails are
-not penalised, only internal gaps (in the full run it would rescue 90 % of the
-chains that fail on `coverage`). An optional cut on solvation density
-(`solvation_energy / interface_area`) is available but disabled by default.
-`min_chain_length` (at least 40 residues by default) keeps peptides out:
-besides being a different problem, chains this short cannot reach a significant
-MMseqs2 E-value, so near-identical peptides would escape the homology
-clustering of step 09 and its leakage guarantees. `max_chain_length` (600) is
-often limited by the model you plan to train. Homo/hetero pairs are defined by
-the same entity or a sequence identity of at least `enrichment.homo_similarity`,
-measured on a global alignment over the shorter chain, so a truncated construct
-of the same protein counts as homo. Step 07 also writes descriptive statistics
-of every variable to its log and histograms to `reports/07_quality_filter_plots.pdf`.
+| `clustering.coverage` | Largest chain cluster at 40 % | C3 chains leaking, A / B | C2 unseen chains, A / B | `split_c40` validation pairs, A / B | Step 14 |
+|---|---|---|---|---|---|
+| 0.90 (default) | 5,065 sequences (16 %) | 6 / 22 of 431 | 3 / 21 of 286 | 9 / 84 of 3,989 | 0 leaks |
+| 0.80 | 5,069 (16 %) | 2 / 9 of 429 | 2 / 9 of 289 | 0 / 225 of 4,007 | 2 rows (one pair) linked in step 14 but not in step 09 |
+| 0.50 | 8,592 (27 %) | 1 / 4 of 430 | 0 / 9 of 289 | 0 / 31 of 4,009 | 0 leaks |
 
-**Structure checks (`special_residues`, `contacts`, step 08).** Only the
-polymer residues of each chain are considered (ligands, waters and free amino
-acids that share the chain ID are ignored), in the first model and the A
-conformer. A chain is dropped if it has a polymer residue that is not one of
-the 20 standard amino acids, not in `allowed` and not in `ignore` (terminal caps
-ACE and NH2 by default). The default is conservative: only the selenium
-residues used for phasing or naturally present (MSE, SEM, SEC) are allowed. In
-the full run the excluded chains (5.7 %) carry cysteine modifications that are
-usually crystallisation artefacts (CSO, CSD, CSS, CME), catalytic or cofactor
-lysines (KCX, LLP), GFP-like chromophores, N-terminal modifications (PCA),
-post-translational modifications, D-amino acids or unknown residues (UNK); add
-any of them to `allowed` if they are acceptable for your use. Every pair must
-also have at least `min_residue_contacts` residue pairs with polymer heavy atoms
-within `cutoff` Å (a KD-tree search); this catches PISA interfaces that cannot
-be mapped onto the structure. In the full run no pair failed it.
-
-**Clustering (`clustering`, step 09).** Chains are clustered at eight
-identity thresholds (98 to 40 %); the clusters define the pruning groups
-(98 %), the validation splits (90, 80, 60 %), the C2 test buckets (pair
-clusters at 70 and 80 %) and the C3 buckets (chain clusters at 40 and 50 %).
-The default method, `connected_components`, runs one all-vs-all MMseqs2 search
-and links two sequences when their identity is above the threshold with the
-required alignment coverage in either search direction (the same rule as the
-leakage audit); clusters are the connected components (single linkage). Two
-sequences of different clusters then never have an MMseqs2 hit that meets the
-linking criterion, so cluster-based splits do not leak homologues *as long as
-the search sees every hit*: `max_seqs` must exceed the number of prefilter
-candidates of the most populated family (antibody chains need thousands). The
-price is that large families merge into big clusters (at 40 %, the largest
-component of the full run holds 15 % of the sequences), and that two members
-of a cluster can be less similar than the threshold through a chain of links.
-The alternative `set_cover` (MMseqs2 `cluster`, used by the working versions)
-only guarantees that every member is similar to its representative: members of
-different clusters can still be similar above the threshold, which left about
-3 % of the earlier validation pairs and of its unseen-protein test chains with
-a homologue in training. Other approaches can be preferable depending on the
-question: greedy incremental clustering (CD-HIT), graph-partitioning methods
-that balance split sizes while removing cross-split homology (GraphPart),
-structure-based clustering (Foldseek, TM-score), which also catches remote
-homologues below ~30 % sequence identity, or splits by domain classification
-(CATH, SCOP, ECOD).
-
-**Redundancy (`pruning`, step 10).** Many entries contain several copies of
-the same complex (non-crystallographic symmetry, several assemblies), and close
-homologues appear across entries. The step works in two stages:
-
-1. *Identical sequence pairs* are capped, across the whole dataset, to the best
-   `exact_K_homo` / `exact_K_heter` rows (ranked by coverage, P-value,
-   interface area, R-free, resolution and solvation energy). In the full run
-   this stage removed 63 % of the rows (141,523 → 52,085).
-2. *Pair clusters* (`pair_key`, by default `pair_cluster_98`: both chains in
-   the same 98 % clusters) with more than `activate_n` rows are reduced to
-   `K_redund_*` rows when their interface areas are almost identical (range
-   within `area_range_pct_thr` % of the mean) or to `K_var_*` rows spread over
-   interface-area bins otherwise (52,085 → 43,164).
-
-Point mutants and variants with a few substitutions are different sequence
-pairs, so the first stage keeps them, but they share a 98 % pair cluster, so
-the second stage keeps only a few of them per complex. If you want mutant
-series (e.g. to learn the effect of substitutions on the interface), raise
-`activate_n` (a very large value disables the second stage) or the `K_*`
-values; for a strictly non-redundant set, set every `K` to 1.
-`compare_pair_cluster_95` additionally prints a broader pruning in
-`pair_cluster_95` for comparison.
-
-**Test set (`test_set`, step 11).** The external test set has three kinds
-of buckets, built in this order and removed from the training pool:
-
-- **C3, unseen proteins** (`n_c3_40`, `n_c3_50`): pairs whose two chains belong
-  to rare chain clusters at 40 % (then 50 %) identity. Every row of the
-  training pool that contains one of those clusters is removed, so both
-  proteins are new to the model at that identity. The candidates are the
-  `c3_mult` × N rows of the rarest families, sampled within length and
-  interface-area strata.
-- **C2, new pairs of known proteins** (`n_c2_c70`, `n_c2_c80`): one pair per
-  pair cluster at 70 % (80 %) identity, where both chains also appear in other
-  pairs; the whole pair cluster and the identical sequence pairs are removed
-  from training, and each chain cluster (98 %) is used at most
-  `c2_chain_cap_98_global` times. `c2_pick` chooses the pair that represents its
-  cluster: `random` (default; quality similar to training), `best` or `worst`
-  (the working versions used `worst`, which gave a test set of lower coverage
-  than the training data and mixed structure quality with novelty).
-- **C1, train-like** (`n_c1`): pairs from the most populated families, sampled
-  within strata; only the selected rows are removed, so close homologues remain
-  in training. C1 measures performance where the model has seen the most
-  examples (an optimistic bound) and is expected to show leakage in step 14.
-
-Every bucket is forced to `homo_frac` homodimers (0.5 by default, while about
-75 % of the pairs are homo), so report metrics separately for homo and hetero
-pairs. C1 and C3 are stratified by length and interface-area bins
-(`nbins_len`, `nbins_area`) in proportion to their candidates, so they follow
-the distribution of those candidates rather than that of the training set (C3
-interfaces are smaller on average); C2 is only balanced for homo/hetero.
-
-**Train/validation splits (`splits`, step 12).** The remaining pool is split
-three times, by pair cluster at 90, 80 and 60 % identity (`split_c90`,
-`split_c80`, `split_c60`), sending `val_frac` of the rows to validation with
-the same homo/hetero proportion. Splitting by pair cluster means that a
-protein A can appear in training and validation, but no training pair joins a
-homologue of A with a homologue of its partner at the scheme's identity: the
-validation sets measure generalisation to new pairs, increasingly distant from
-the training pairs. The three schemes are independent splits, so train one
-model per scheme to draw that curve. `family_weight_c90` (1/√ of the size of
-the pair cluster at 90 % in training) can be used to down-weight large
-families with `split_c90`. `validation_split` selects the scheme exported as
-`validation.csv`.
-
-**Hard negatives (`hard_negatives`, step 13).** Two protein chains of the
-same biological assembly with no PISA interface between them. Pairs of
-identical sequences are excluded by default (a copy of a protein not touching
-another copy usually contradicts a homo interface elsewhere in the complex). A
-negative is dropped if its pair of chain clusters at `conflict_level` (40 % by
-default) has a PISA interface in any downloaded assembly, because homologues
-above ~30–40 % identity tend to interact in the same way (Aloy et al.,
-*J. Mol. Biol.* 2003); it is also dropped if it fails the quality thresholds of
-step 07 (except the interface ones), if a chain has forbidden residues (same
-rules as step 08) or if the chains are closer than `min_distance` Å
-(`max_distance`, if set, keeps only near-miss pairs). One negative is kept per
-entry and sequence pair, at most `max_per_pair_cluster` per pair cluster
-(`pair_cluster_key`, 98 % by default) across entries, so that complexes
-deposited many times do not dominate, and at most `max_per_entry` per entry, so
-that ribosomes and capsids do not either. Each negative gets a split for every
-scheme of step 12 (`split_c90`, `split_c80`, `split_c60`): test if a protein
-appears only in the test set or in a held-out C3 cluster, validation if a
-protein appears only in validation, training otherwise; negatives of the same
-pair cluster at `family_level` (40 %, the conflict level) all go to the most
-restrictive of those sets, so a family is never split between training and
-evaluation. The step stops if a PISA file is missing, since that would hide
-contacts. A negative means "no evidence of contact in the downloaded
-structures", not a proven non-interaction.
-
-**Leakage audit (step 14).** Chains are searched in both directions with the
-identity, coverage and E-value criteria of step 09: every test bucket against
-the training and validation positives, the validation set of each scheme
-(`split_c90`, `split_c80`, `split_c60`) against its training positives, and the
-hard negatives of the test set against the training and validation positives
-and the non-test negatives. `reports/14_leakage_audit.json` gives the number
-of leaks of each set at its design threshold (chain level for the
-unseen-protein C3 buckets, pair level for C2, validation and hard negatives)
-and `reports/14_leakage_by_threshold.tsv` the full picture at every threshold.
-With connected components all of them should be zero; `tests/check_outputs.py`
-fails otherwise. C1 is train-like by design and has no design threshold. The
-audit uses the same tool and criteria as the clustering, so it is a
-consistency check: it cannot see remote homologues below 40 % identity or a
-single shared domain in multidomain proteins.
+Lowering the coverage removes most construct leaks, but single linkage then
+chains families together through multidomain proteins (at 0.50 the largest
+training family at 40 % grows from 3,670 to 9,300 rows, and the test negatives
+fall from 342 to 206), and more links sit at the edge of what the heuristic
+MMseqs2 search finds (with 0.80, a homomeric validation pair at exactly 40 %
+identity is linked in step 14 but was not in step 09). Leaks by B in
+validation also depend on which families the random split sends there. The parameters to change are
+`clustering.coverage`, `clustering.cov_mode`, `clustering.thresholds`,
+`test_set.level`, `splits.schemes` and `hard_negatives.conflict_level`;
+`snakemake leakage_control` then measures the result with the independent
+criterion. [docs/METHODS.md](docs/METHODS.md) describes the clustering, the
+test classes and the audit in detail.
 
 ## Outputs
 
@@ -349,35 +241,37 @@ data/
 ├── raw/         PISA JSON and assembly mmCIF files (gzipped), with download manifests
 ├── interim/     tables of steps 01–11
 ├── processed/   test.csv, trainval_splits.csv, validation.csv, hard_negatives.csv
-├── reports/     audits, parse errors, quality-filter plots
+├── reports/     audits, parse errors, quality-filter plots, provenance.json
 └── logs/        one log per step
 ```
 
-Each row of the final tables carries the PISA interface metrics (area,
-P-value, solvation and stabilisation energy, hydrogen bonds, salt bridges) and
-the assembly-level metrics, what was measured in the structure (sequence,
-length, coverage and internal coverage of each chain, identity between them,
-residue and atom contacts, minimum inter-chain distance, special residues), the
-entry metadata, the chain and pair cluster IDs at the eight thresholds, the
-test bucket or the three split columns, the gold/silver `tier` and
-`family_weight_c90`.
+Each row of the final tables carries the PISA interface metrics, what was
+measured in the structure, the entry metadata, the membrane, antibody and
+UniProt annotations of each chain, the chain and pair cluster IDs at every
+threshold, the test class or the split columns, the gold/silver `tier` and
+`family_weight_c40`. [docs/COLUMNS.md](docs/COLUMNS.md) describes every column.
 
-Disk space: about 25 KB of PISA JSON and 0.27 MB of mmCIF per assembly, i.e.
-~0.5 GB for the 1,500-ID test and 27 GB for 164,000 IDs.
+## Documentation
+
+- [docs/METHODS.md](docs/METHODS.md): what each step does and what its parameters mean.
+- [docs/DECISIONS.md](docs/DECISIONS.md): every curation decision, with its reason, precedents, effect and biases.
+- [docs/COLUMNS.md](docs/COLUMNS.md): the columns of the final tables.
+- [docs/MIGRATION.md](docs/MIGRATION.md): how this version relates to the working versions (Seq5–Seq8, 2025–2026) and the bugs fixed on the way.
 
 ## Known issues
 
-- `number_interface_residues` is copied from PISA-lite, where it is the length
-  of the residue list of one molecule (the whole chain), not the number of
-  interface residues. No step filters on it, but do not use it as a feature;
-  the real count is the number of residues with `buried_surface_areas` > 0.
-- With `quality_filter.exptl_method: null`, step 07 disables the method filter
-  but step 13 keeps no negatives (it compares with `None`).
 - The homo filter of step 13 only removes identical sequences, not the
   `is_homo` definition of step 06 (the conflict filter usually catches the rest).
-- The hard negatives come from few large complexes (35 % from proteasomes in
-  the full run, 30 families at 40 % among the 132 test negatives) and none is a
-  homodimer: evaluate them per family and against hetero positives only.
+- The hard negatives come from few large complexes (35 % from proteasome
+  entries in the full run, 106 families at 40 % among the 342 test negatives)
+  and none is homomeric: evaluate them per family and against heteromeric
+  positives only.
+- C1 has 91 homomeric and 59 heteromeric pairs in the full run, not 75 and 75:
+  only 59 heteromeric pair clusters leave both proteins with other partners in
+  training, and homomeric pairs fill the class.
+- `revision` is read as a number on the way, so `1.0` appears as `1` and
+  `1.10` as `1.1` (3 entries of the reference run); read it as text and
+  compare it with `revision_date`.
 - Steps 01–04 query live services: a rerun of those steps can download updated
   PISA files and metadata while keeping older mmCIF files. To freeze a dataset,
   keep `data/raw/` and `data/interim/` and do not rerun steps 01–04.
@@ -395,25 +289,41 @@ Disk space: about 25 KB of PISA JSON and 0.27 MB of mmCIF per assembly, i.e.
   can take hours during a download) and exits without losing anything; Ctrl-C
   stops at once and removes the incomplete outputs of that step.
 
-## Data sources
+## Data sources and terms of use
 
-- **RCSB PDB** — assembly mmCIF files (`files.rcsb.org`), the Data API
-  (`data.rcsb.org`, current assemblies and entry metadata) and the Advanced Search.
-  Burley et al., *Nucleic Acids Res.* (2023).
-- **PDBe PISA** — interface and assembly analysis
-  (`ftp.ebi.ac.uk/pub/databases/msd/pdb-assemblies-analysis`).
+The pipeline downloads data; the datasets it builds keep the terms of their
+sources.
+
+- **PDB** (RCSB PDB: assembly mmCIF files, Data API, Advanced Search) — data
+  under [CC0 1.0](https://www.wwpdb.org/about/usage-policies). Burley et al.,
+  *Nucleic Acids Res.* (2023).
+- **PDBe PISA** (interface and assembly analysis, PISA-lite bulk files) — PDBe
+  data are public under [CC0](https://www.ebi.ac.uk/pdbe/about/public-data-access-statement),
+  with the [EMBL-EBI terms of use](https://www.ebi.ac.uk/about/terms-of-use).
   Krissinel & Henrick, *J. Mol. Biol.* 372, 774–797 (2007).
-- **MMseqs2** — Steinegger & Söding, *Nat. Biotechnol.* 35, 1026–1028 (2017).
-- **Biopython** — Cock et al., *Bioinformatics* 25, 1422–1423 (2009).
-- **Snakemake** — Mölder et al., *F1000Research* 10, 33 (2021).
+- **IntAct** (PSICQUIC web service, step 13) — data under CC BY 4.0
+  ([IMEx](https://imex-consortium.github.io/about/)): cite IntAct when you use
+  the `intact_*` columns. del Toro et al., *Nucleic Acids Res.* 50, D648–D653 (2022).
+- **SIFTS** (UniProt accessions, through RCSB), **PDBTM** and **SAbDab**
+  (membrane and antibody annotations, through RCSB).
+
+Software and methods: MMseqs2 (Steinegger & Söding, *Nat. Biotechnol.* 2017),
+PRODIGY-cryst (Elez et al., *BMC Bioinformatics* 2018; Jiménez-García et al.,
+*Bioinformatics* 2019), Biopython (Cock et al., *Bioinformatics* 2009),
+Snakemake (Mölder et al., *F1000Research* 2021), and for the optional control
+EMBOSS (Rice et al., *Trends Genet.* 2000) and parasail (Daily, *BMC
+Bioinformatics* 2016). The test classes follow Park and Marcotte (*Nat. Methods*
+2012). [docs/DECISIONS.md](docs/DECISIONS.md) lists every reference.
 
 ## Roadmap
 
 On 21 July 2027 the wwPDB switches to extended PDB IDs (`pdb_` + 8 characters)
 and a reorganised archive. Version 2 will accept both ID formats and use the new
-archive layout. See [docs/MIGRATION.md](docs/MIGRATION.md) for the history of the pipeline.
+archive layout.
 
-## License
+## Citation, license and contact
 
-The code is released under the [MIT License](LICENSE). Data downloaded by the
-pipeline keep the terms of their sources (RCSB PDB and PDBe).
+If you use PPI_PDB_Scraper, please cite it as described in
+[CITATION.cff](CITATION.cff) (GitHub shows it under *Cite this repository*).
+The code is released under the [MIT License](LICENSE). Questions and bug
+reports: [GitHub issues](https://github.com/marcos-bioinformatics/PPI_PDB_Scraper/issues).

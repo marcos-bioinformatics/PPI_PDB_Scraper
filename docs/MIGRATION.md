@@ -1,9 +1,12 @@
-# From PPI_PDB_Scrapper Seq8 to v1
+# From PPI_PDB_Scraper Seq8 to v1
 
 This repository is the cleaned-up, reproducible version of the working pipeline
-used to build the PPI_PDB_Scrapper Seq8 dataset (developed August 2025 – March
-2026). The scientific design and the order of the steps are unchanged; what
-changed is how the steps are wired together, plus a few bug fixes.
+used to build the PPI_PDB_Scraper Seq8 dataset (developed August 2025 – March
+2026). The order of the steps is unchanged. What changed is how the steps are
+wired together, a number of bug fixes and, after a curation review, parts of
+the scientific design: the test set, the clustering, the splits and family
+weights, the PRODIGY-cryst filter (step 08b) and the checks on the hard
+negatives ([DECISIONS.md](DECISIONS.md) records every decision).
 
 ## Script mapping
 
@@ -17,6 +20,7 @@ changed is how the steps are wired together, plus a few bug fixes.
 | `06_enrich_mmcif.py` | `3_CIF_scrapping_ASU_Assembly.py` |
 | `07_quality_filter.R` | `mmcif_enrichment_out/masterr_csv_164k.R` |
 | `08_check_structures.py` | `4_filter_special_residues_SR.py` + contact check (KD-tree adapted from `NeighborSearch.py` / `Test_distance.py` of the ML code) |
+| `08b_prodigy_filter.py` | new |
 | `09_cluster_chains.py` | `5_clustering.py` |
 | `10_prune_redundancy.R` | `mmseqs_chain_clustering_out/2_pruning_98.R` |
 | `11_build_test_set.R` | `mmseqs_chain_clustering_out/3_test_set_datatable.R` |
@@ -56,16 +60,24 @@ changed is how the steps are wired together, plus a few bug fixes.
 
 ## Defaults that differ from Seq8
 
-To reproduce Seq8 exactly, set these values in `config/config.yaml`:
+The curation review of November 2026 changed several defaults (see
+[DECISIONS.md](DECISIONS.md)); the test-set design of Seq8 is no longer
+available, so Seq8 cannot be reproduced exactly with this version. The main
+differences:
 
 | Parameter | v1 default | Seq8 |
 |---|---|---|
-| `quality_filter.max_chain_length` | 600 | 900 (the saved script said 800) |
+| `assemblies.selection` | `first` | every assembly analysed by PISA |
+| `quality_filter.max_chain_length` | 1000 | 900 (the saved script said 800) |
 | `quality_filter.min_chain_length` | 39 (at least 40 residues) | 12 (at least 13) |
-| `quality_filter.max_solvation_density` | null (off) | -0.0068 |
+| `quality_filter.max_solvation_density` | removed | -0.0068 |
 | `enrichment.homo_similarity` | on an alignment | positional identity, no alignment |
+| `prodigy.filter` | on: pairs below 1,000 Å² called crystal by PRODIGY-cryst are dropped | — (new in v1) |
 | `clustering.method` | `connected_components` | `set_cover` |
-| `test_set.c2_pick` | `random` | `worst` (lowest-quality pair of each cluster) |
+| `clustering.thresholds` | 95, 90, 60, 40, 30 % | 98 to 40 % |
+| `pruning.cluster_pruning` | off (family weights instead) | on, in `pair_cluster_98` |
+| `test_set` | the three classes of Park and Marcotte at 40 % | C1 train-like, C2 at 70/80 %, C3 at 40/50 % |
+| `splits.schemes` | 60 and 40 %, weights at 40 % | 90, 80 and 60 %, weights at 90 % |
 | `hard_negatives.conflict_level` | `c40` | — (new in v1) |
 
 `quality_filter.coverage_metric: internal_coverage` and `quality_filter.max_resolution`
@@ -162,17 +174,27 @@ pipeline was then rerun from a clean clone and checked with
 
 ## R scripts
 
-The R scripts keep their original logic. The only edits are mechanical:
+In the first v1 code the R scripts kept their original logic; the curation
+review then changed steps 03, 07, 10, 11 and 12 as recorded in
+[DECISIONS.md](DECISIONS.md) (step 11 was rewritten). The edits of the first v1
+code were mechanical:
 reading the config (input/output paths and the thresholds that were literals),
 writing outputs with `row.names = FALSE`, sending the histograms of step 07 to
 `reports/07_quality_filter_plots.pdf`, the `easy_score` fix above, and the
 validation export at the end of step 12, dropping the helper column `.area`
 from the output of step 10 and making its comparison run in `pair_cluster_95`
-optional (`pruning.compare_pair_cluster_95`), which halves the run time.
+optional (`pruning.compare_pair_cluster_95`, later removed), which halves the run time.
+Before publication, comments and messages were translated into English and
+console-only debug lines were removed, with byte-identical outputs on the test
+configuration; steps 11 and 12 no longer export the columns that repeat
+another one (the step-10 aliases `pair_cluster_NN`, `A_cluster_NN`,
+`B_cluster_NN`, and `is_homo01`, `is_homo_80` and `coverage_pct`), which stay
+internal.
 
 ## Regression against the Seq8 files
 
-The R steps were run on the original Seq8 intermediate tables:
+The R steps of the first v1 code (before the curation review changed the
+defaults) were run on the original Seq8 intermediate tables:
 
 | Step | Result |
 |---|---|

@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use PPI_PDB_Scraper or a dataset built with it, please cite it as below."
+title: "PPI_PDB_Scraper: a reproducible pipeline for curated protein–protein interface datasets from the PDB"
+type: software
+authors:
+  - given-names: "Marcos"
+    family-names: "Elizalde-Horcada"
+    alias: marcos-bioinformatics
+version: 1.0.0
+date-released: "2026-11-11"
+license: MIT
+repository-code: "https://github.com/marcos-bioinformatics/PPI_PDB_Scraper"
+abstract: >-
+  A Snakemake workflow (Python and R) that turns a list of PDB IDs into a
+  curated dataset of protein–protein interfaces for machine learning: PDBe
+  PISA-lite interfaces, RCSB biological assemblies and metadata, crystallographic
+  and structural quality control, a PRODIGY-cryst filter for small interfaces,
+  MMseqs2 clustering by connected components, a test set with the classes of
+  Park and Marcotte, cluster-aware train/validation splits with family weights,
+  hard negatives checked against IntAct, and a homology-leakage audit.
+keywords:
+  - protein–protein interactions
+  - Protein Data Bank
+  - PISA
+  - dataset curation
+  - machine learning
+  - data leakage
+  - Snakemake
