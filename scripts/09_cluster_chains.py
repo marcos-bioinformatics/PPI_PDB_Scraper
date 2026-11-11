@@ -162,7 +162,7 @@ def main() -> None:
 
     src = paths["prodigy_filtered"] if cfg.get("prodigy", {}).get("filter") else paths["checked"]
     df = pd.read_csv(src, keep_default_na=False, na_values=[""],
-                     dtype={"pdb_id": str, "molA_chain_id": str, "molB_chain_id": str})
+                     dtype={"pdb_id": str, "molA_chain_id": str, "molB_chain_id": str, "revision": str})
 
     uid_a = df["molA_seq"].map(seq_uid)
     uid_b = df["molB_seq"].map(seq_uid)

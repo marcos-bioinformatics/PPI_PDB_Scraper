@@ -221,7 +221,8 @@ def main() -> None:
     asm_tasks = [t for t in asm_tasks if Path(t[2]).is_file()]
     log.info("Assembly files on disk: %d/%d", len(asm_tasks), len(pairs))
 
-    entry_df = pd.read_csv(paths["entry_metadata"], keep_default_na=False, na_values=[""], dtype={"pdb_id": str})
+    entry_df = pd.read_csv(paths["entry_metadata"], keep_default_na=False, na_values=[""],
+                           dtype={"pdb_id": str, "revision": str})  # revision 1.10 is not 1.1
     entity_df = pd.read_csv(paths["entity_metadata"], keep_default_na=False, na_values=[""],
                             dtype={"pdb_id": str, "entity_id": str, "uniprot_ids": str, "membrane_sources": str})
     chain_df, errors = run_cached("assembly", parse_assembly, asm_tasks, parts_dir, workers)

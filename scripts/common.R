@@ -45,6 +45,18 @@ load_config <- function(path = NULL) {
 # function receiving it can apply its own default.
 int_or_null <- function(x) if (is.null(x)) NULL else as.integer(x)
 
+# Identifier-like columns that must be read as text: a chain named "T", a PDB ID such as
+# 1e10 or a revision such as 1.10 would otherwise become logical or numeric. (A chain named
+# "NA" is still read as missing: the R steps keep the default na.strings, because missing
+# values written by write.csv travel through the Python steps as the text "NA".)
+TEXT_COLUMNS <- c("pdb_id", "molA_chain_id", "molB_chain_id", "revision")
+
+# colClasses for the TEXT_COLUMNS present in a CSV file (for read.csv and fread).
+text_col_classes <- function(path) {
+  present <- intersect(TEXT_COLUMNS, names(data.table::fread(path, nrows = 0)))
+  setNames(rep("character", length(present)), present)
+}
+
 ensure_parent <- function(path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   path

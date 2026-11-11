@@ -94,7 +94,7 @@ def main() -> None:
     reports = Path(paths["reports_dir"])
 
     df = pd.read_csv(paths["quality_filtered"], keep_default_na=False, na_values=[""],
-                     dtype={"pdb_id": str, "molA_chain_id": str, "molB_chain_id": str})
+                     dtype={"pdb_id": str, "molA_chain_id": str, "molB_chain_id": str, "revision": str})
     df = df.loc[:, ~df.columns.str.startswith(("Unnamed", "X."))]
     df["assembly_id"] = df["assembly_id"].astype(int)
 

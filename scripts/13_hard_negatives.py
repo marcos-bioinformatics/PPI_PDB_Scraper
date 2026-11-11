@@ -131,22 +131,26 @@ def intact_crosscheck(cand: pd.DataFrame, icfg: Dict, cache_path: Path) -> Tuple
                 r = session.get(url, timeout=(10, 120))
                 if r.status_code == 200:
                     rows = [line.split("\t") for line in r.text.splitlines() if line.strip()]
+                    if any(len(x) < 12 for x in rows):    # not MITAB 2.7 (e.g. an error page): retry
+                        raise ValueError("unexpected answer")
                     return pair, [[(re.findall(r"MI:\d{4}", x[11]) or [""])[0],
                                    (re.findall(r"MI:\d{4}", x[6]) or [""])[0],
                                    x[15] if len(x) > 15 else "-"] for x in rows]
-            except requests.RequestException:
+            except (requests.RequestException, ValueError):
                 pass
             time.sleep(2 ** attempt)
         return pair, None
 
     failures = 0
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for pair, rows in ex.map(query, todo):
-            if rows is None:
-                failures += 1
-            else:
-                cache["pairs"][pair] = {"date": today, "rows": rows}
-    write_json(ensure_parent(cache_path), cache)
+    try:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for pair, rows in ex.map(query, todo):
+                if rows is None:
+                    failures += 1
+                else:
+                    cache["pairs"][pair] = {"date": today, "rows": rows}
+    finally:  # keep the answers already received, even if the step stops
+        write_json(ensure_parent(cache_path), cache)
 
     def count(pairs, direct_only):
         if any(p not in cache["pairs"] for p in pairs):
@@ -172,7 +176,8 @@ def main() -> None:
 
     chains = pd.read_csv(paths["chain_metadata"], keep_default_na=False, na_values=[""],
                          dtype={"pdb_id": str, "chain_id": str, "entity_id": str})
-    entries = pd.read_csv(paths["entry_metadata"], keep_default_na=False, na_values=[""], dtype={"pdb_id": str})
+    entries = pd.read_csv(paths["entry_metadata"], keep_default_na=False, na_values=[""],
+                          dtype={"pdb_id": str, "revision": str})
     chains["uid"] = chains["seq"].map(seq_uid)
     seq_of = {(p, a, c): u for p, a, c, u in zip(chains["pdb_id"], chains["assembly_id"], chains["chain_id"], chains["uid"])}
 

@@ -6,7 +6,8 @@ source(file.path("scripts", "common.R"))
 cfg <- load_config()
 
 # Load master_pisa.csv with all the interfaces
-df = read.csv(cfg$paths$master_pisa)
+# IDs as text (a PDB ID such as 1e10 or a chain named T would otherwise be read as a number or a logical)
+df = read.csv(cfg$paths$master_pisa, colClasses = text_col_classes(cfg$paths$master_pisa))
 
 # Filter to the PDB IDs extracted and downloaded from the PDB
 

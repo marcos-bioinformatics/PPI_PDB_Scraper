@@ -62,7 +62,8 @@ HOMO_FRAC <- as.numeric(ts$homo_frac)
 CAP <- as.integer(ts$max_cluster_rows)
 
 cols <- c(paste0(c("A_cluster_", "B_cluster_", "pair_cluster_"), LEVEL))
-df0 <- fread(cfg$paths$pruned, na.strings = c("", "NA"), colClasses = setNames(rep("character", 3), cols))
+df0 <- fread(cfg$paths$pruned, na.strings = c("", "NA"),
+             colClasses = c(setNames(rep("character", 3), cols), text_col_classes(cfg$paths$pruned)))
 missing <- setdiff(c("row_id", "is_homo01", cols), names(df0))
 if (length(missing)) stop("Missing columns: ", paste(missing, collapse = ", "),
                           " (test_set.level must be one of clustering.thresholds)")

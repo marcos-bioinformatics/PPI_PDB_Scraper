@@ -15,10 +15,14 @@ Output: paths.prodigy_cryst, one row per positive (row_id):
   prodigy_ics           intermolecular residue contacts (PRODIGY definition)
   prodigy_link_density  contacts / (interface residues of A x interface residues of B)
   prodigy_error         why a pair could not be scored
-It is an annotation: no step filters on it. Structures are prepared as
-PRODIGY-cryst does (first model, one conformer per atom, no HETATM or water),
-but only the two chains of the pair are kept, so other molecules of the
-assembly (e.g. nucleic acids) do not stop the classification. Pairs whose own
+It is an annotation: no step filters on it (step 08b uses the same scoring on
+small interfaces). Structures are prepared as PRODIGY-cryst does (first model,
+one conformer per atom, no HETATM or water), with two differences: only the two
+chains of the pair are kept, so other molecules of the assembly (e.g. nucleic
+acids) do not stop the classification, and selenomethionine (MSE) and
+selenocysteine (SEC), which steps 08 and 13 allow, are scored as their sulphur
+parents (MET, CYS) instead of being removed with the HETATM records (a SeMet
+chain would otherwise lose its methionines and their contacts). Pairs whose own
 chains have a non-standard residue in ATOM records are not scored.
 """
 
@@ -41,8 +45,27 @@ from prodigy_cryst.interface_classifier import ProdigyCrystal
 from common import ensure_parent, get_logger, parse_args, pisa_subdir
 
 log = get_logger("prodigy_cryst")
+# selenium residue -> (sulphur parent, selenium atom, sulphur atom)
+SELENIUM_PARENT = {"MSE": ("MET", "SE", "SD"), "SEC": ("CYS", "SE", "SG")}
 COLUMNS = ["row_id", "pdb_id", "assembly_id", "molA_chain_id", "molB_chain_id", "prodigy_class", "prodigy_p_bio",
            "prodigy_ics", "prodigy_link_density", "prodigy_error"]
+
+
+def to_sulphur_parent(res) -> None:
+    """Turn a HETATM MSE or SEC residue into the ATOM residue of its sulphur parent, in place."""
+    parent_name, se_name, s_name = SELENIUM_PARENT[res.resname]
+    chain = res.parent
+    chain.detach_child(res.id)
+    res.id = (" ", res.id[1], res.id[2])
+    res.resname = parent_name
+    if se_name in res:
+        atom = res[se_name]
+        res.detach_child(se_name)
+        atom.id = atom.name = s_name
+        atom.fullname = f" {s_name} "
+        atom.element = "S"
+        res.add(atom)
+    chain.add(res)
 
 
 def prepare(path: str, chains):
@@ -70,7 +93,9 @@ def prepare(path: str, chains):
             residue.add(sel)
     bad = {}
     for res in list(s.get_residues()):
-        if res.id[0][0] in ("W", "H"):
+        if res.id[0].startswith("H_") and res.resname in SELENIUM_PARENT:
+            to_sulphur_parent(res)
+        elif res.id[0][0] in ("W", "H"):
             res.parent.detach_child(res.id)
         elif not is_aa(res, standard=True):
             bad[res.parent.id] = res.resname

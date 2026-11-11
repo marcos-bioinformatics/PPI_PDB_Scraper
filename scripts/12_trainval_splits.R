@@ -134,7 +134,7 @@ audit_split <- function(DT, split_col, cluster_col, strat_col = "is_homo01") {
   )
 }
 
-df <- fread(IN_CSV, na.strings = c("", "NA"))
+df <- fread(IN_CSV, na.strings = c("", "NA"), colClasses = text_col_classes(IN_CSV))
 setDT(df)
 if (nrow(df) == 0L) stop("The train/val pool is empty: check step 11")
 

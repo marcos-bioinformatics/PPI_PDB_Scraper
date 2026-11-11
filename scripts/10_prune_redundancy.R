@@ -22,7 +22,8 @@ source(file.path("scripts", "common.R"))
 cfg <- load_config()
 pr <- cfg$pruning
 
-df <- read.csv(cfg$paths$clustered) %>%
+# IDs and revision as text (a revision 1.10 would otherwise become 1.1)
+df <- read.csv(cfg$paths$clustered, colClasses = text_col_classes(cfg$paths$clustered)) %>%
   select(-matches("^Unnamed"))
 
 # -----------------------------

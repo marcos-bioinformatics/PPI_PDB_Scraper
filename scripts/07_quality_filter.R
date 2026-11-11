@@ -9,7 +9,8 @@ qf <- cfg$quality_filter
 # The histograms of this script are saved to a PDF in the reports folder
 pdf(ensure_parent(cfg$paths$quality_plots))
 
-df = read.csv(cfg$paths$enriched)
+# IDs and revision as text (a revision 1.10 would otherwise become 1.1)
+df = read.csv(cfg$paths$enriched, colClasses = text_col_classes(cfg$paths$enriched))
 
 # Data Analysis
 
