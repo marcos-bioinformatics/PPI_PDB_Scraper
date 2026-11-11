@@ -6,6 +6,8 @@ library(tidyr)
 # ----------------------------
 source(file.path("scripts", "common.R"))
 cfg <- load_config()
+# Identity levels of step 09 (clustering.thresholds), as integers: 95, 90, 60, 40, 30 by default
+LEVELS <- as.integer(round(100 * unlist(cfg$clustering$thresholds)))
 
 df <- read.csv(cfg$paths$clustered) %>%
   select(-matches("^Unnamed"))
@@ -13,7 +15,7 @@ df <- read.csv(cfg$paths$clustered) %>%
 # ----------------------------
 # 1) Ensure IDs + cluster aliases (NO FAIL)
 # ----------------------------
-ensure_ids_and_clusters <- function(df, use_label_asym = FALSE, thrs = c(98,95,90,80,70,60,50,40)) {
+ensure_ids_and_clusters <- function(df, use_label_asym = FALSE, thrs = LEVELS) {
   chainA <- if (use_label_asym) "molA_label_asym_id" else "molA_chain_id"
   chainB <- if (use_label_asym) "molB_label_asym_id" else "molB_chain_id"
   
@@ -94,7 +96,7 @@ ppi_profile <- function(df) {
     n_rows = nrow(df),
     n_unique_row_id = n_distinct(df$row_id),
     n_unique_chain_pair_id = n_distinct(df$chain_pair_id),
-    n_unique_pair_cluster_98 = if ("pair_cluster_98" %in% names(df)) n_distinct(df$pair_cluster_98) else NA_integer_,
+    n_unique_pair_cluster_top = if (paste0("pair_cluster_", LEVELS[1]) %in% names(df)) n_distinct(df[[paste0("pair_cluster_", LEVELS[1])]]) else NA_integer_,
     n_chain_instances = length(chains_inst)
   )
 }
@@ -108,7 +110,7 @@ coerce_is_homo01 <- function(x) {
   )
 }
 
-# ranking: preferir no especiales, p_value mínimo, y luego desempates
+# ranking: prefer non-special, lowest p_value, then tie-breakers
 rank_and_keep1 <- function(df) {
   df %>%
     mutate(
@@ -169,8 +171,8 @@ df2 <- df %>%
   ungroup() %>%
   select(-seqA_id, -seqB_id, -pair_seq_exact)
 
-cat("DEDUP por par exacto de secuencia:\n"); print(ppi_profile(df2))
-cat("\nFilas eliminadas:", nrow(df) - nrow(df2), "\n")
+cat("DEDUP by exact sequence pair:\n"); print(ppi_profile(df2))
+cat("\nRows removed:", nrow(df) - nrow(df2), "\n")
 
 # ----------------------------
 # 4) Dedup 2: "soft cap" per exact pair (K homo/hetero)
@@ -193,7 +195,7 @@ df_dedup_soft <- df %>%
   }) %>%
   ungroup()
 
-cat("Filas eliminadas:", nrow(df) - nrow(df_dedup_soft), "\n")
+cat("Rows removed:", nrow(df) - nrow(df_dedup_soft), "\n")
 
 # ----------------------------
 # 5) Audits (NO FAIL)
@@ -303,10 +305,10 @@ audit_sizes <- function(df, key, label) {
   )
 }
 
-# Uses pair_cluster_95/90/60/50/40 which we created as aliases already
+# Uses the pair_cluster_XX aliases created above, at the levels of clustering.thresholds
 audit_pair_cluster_dual <- function(df, label) {
   out <- list()
-  for (k in c(98,95,90,60,50,40)) {
+  for (k in LEVELS) {
     key <- paste0("pair_cluster_", k)
     if (key %in% names(df)) out[[length(out)+1]] <- audit_sizes(df, key, label)
   }
@@ -326,7 +328,7 @@ audit_chain_clusters <- function(df, label) {
   }
   
   res <- list()
-  for (k in c(98,95,90,60,50,40)) {
+  for (k in LEVELS) {
     if (!all(c(paste0("A_cluster_",k), paste0("B_cluster_",k)) %in% names(df))) next
     sizes <- get_counts(k)
     if (nrow(sizes) == 0) next

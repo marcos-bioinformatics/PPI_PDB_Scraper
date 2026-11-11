@@ -6,18 +6,18 @@ source(file.path("scripts", "common.R"))
 cfg <- load_config()
 qf <- cfg$quality_filter
 
-# Los histogramas de este script se guardan en un PDF de informes
+# The histograms of this script are saved to a PDF in the reports folder
 pdf(ensure_parent(cfg$paths$quality_plots))
 
 df = read.csv(cfg$paths$enriched)
 
 # Data Analysis
 
-# df debe estar cargado (data.frame o data.table)
+# df must be loaded (data.frame or data.table)
 setDT(df)
 
 # ----------------------------
-# 1) NAs por columna
+# 1) NAs per column
 # ----------------------------
 na_report <- data.table(
   column = names(df),
@@ -27,14 +27,14 @@ na_report <- data.table(
 
 print(na_report)
 
-# Si quieres ver sólo columnas con NA:
+# To see only the columns with NAs:
 na_report_nonzero <- na_report[n_na > 0]
 print(na_report_nonzero)
 
 # ----------------------------
-# 2) Summary para  variables cuantitativas
+# 2) Summary of quantitative variables
 # ----------------------------
-# Detecta numéricas (incluye integer/numeric)
+# Detect numeric columns (integer/numeric included)
 num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
 
 num_summary <- rbindlist(lapply(num_cols, function(cn) {
@@ -54,8 +54,8 @@ num_summary <- rbindlist(lapply(num_cols, function(cn) {
 }), fill = TRUE)
 
 
-# Eliminación de NAs
-# Cuántos NA hay por columna (y % sobre nrow)
+# NA removal
+# How many NAs per column (and % of nrow)
 na_por_col <- df %>%
   summarise(across(
     everything(),
@@ -77,10 +77,10 @@ df2 <- df %>%
   filter(if_all(all_of(cols_clave), ~ !is.na(.)))
 
 
-# ESTUDIO DE CUANTILES ENERGETICOS
+# STUDY OF ENERGY QUANTILES
 
 # -----------------------------
-# Helper: coerción robusta de is_homo
+# Helper: robust coercion of is_homo
 # -----------------------------
 coerce_is_homo01 <- function(x) {
   x_chr <- trimws(tolower(as.character(x)))
@@ -91,24 +91,18 @@ coerce_is_homo01 <- function(x) {
   )
 }
 
-# -----------------------------
-# Añadir variable de densidad
-# -----------------------------
 df2 <- df %>%
-  mutate(
-    is_homo01 = coerce_is_homo01(is_homo),
-    solvation_density = solvation_energy / interface_area
-  )
+  mutate(is_homo01 = coerce_is_homo01(is_homo))
 
 # -----------------------------
-# 1) Cuantiles globales
+# 1) Global quantiles
 # -----------------------------
 quantile_probs <- c(0, 0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 1)
 
 global_quants <- df2 %>%
   summarise(
     across(
-      c(p_value, interface_area, solvation_energy, solvation_density),
+      c(p_value, interface_area, solvation_energy),
       ~ list(quantile(., probs = quantile_probs, na.rm = TRUE))
     )
   )
@@ -117,7 +111,7 @@ global_quants
 
 
 # -----------------------------
-# 2) Cuantiles por homo / hetero
+# 2) Quantiles by homo / hetero
 # -----------------------------
 by_homo_quants <- df2 %>%
   mutate(
@@ -132,14 +126,11 @@ by_homo_quants <- df2 %>%
     p_value_q            = list(quantile(p_value, probs = quantile_probs, na.rm = TRUE)),
     interface_area_q     = list(quantile(interface_area, probs = quantile_probs, na.rm = TRUE)),
     solvation_energy_q   = list(quantile(solvation_energy, probs = quantile_probs, na.rm = TRUE)),
-    solvation_density_q  = list(quantile(solvation_density, probs = quantile_probs, na.rm = TRUE)),
     .groups = "drop"
   )
 
-by_homo_quants
-
 # -----------------------------
-# 3) Resumen más legible en formato largo
+# 3) More readable summary in long format
 # -----------------------------
 make_quant_table <- function(data, var, group_name = NULL) {
   tibble(
@@ -153,20 +144,17 @@ make_quant_table <- function(data, var, group_name = NULL) {
 quant_table_global <- bind_rows(
   make_quant_table(df2, "p_value"),
   make_quant_table(df2, "interface_area"),
-  make_quant_table(df2, "solvation_energy"),
-  make_quant_table(df2, "solvation_density")
+  make_quant_table(df2, "solvation_energy")
 )
 
 quant_table_by_homo <- bind_rows(
   make_quant_table(filter(df2, is_homo01 == 1L), "p_value", "homo"),
   make_quant_table(filter(df2, is_homo01 == 1L), "interface_area", "homo"),
   make_quant_table(filter(df2, is_homo01 == 1L), "solvation_energy", "homo"),
-  make_quant_table(filter(df2, is_homo01 == 1L), "solvation_density", "homo"),
   
   make_quant_table(filter(df2, is_homo01 == 0L), "p_value", "hetero"),
   make_quant_table(filter(df2, is_homo01 == 0L), "interface_area", "hetero"),
-  make_quant_table(filter(df2, is_homo01 == 0L), "solvation_energy", "hetero"),
-  make_quant_table(filter(df2, is_homo01 == 0L), "solvation_density", "hetero")
+  make_quant_table(filter(df2, is_homo01 == 0L), "solvation_energy", "hetero")
 )
 
 print(quant_table_global, n=50)
@@ -174,7 +162,7 @@ print(quant_table_by_homo, n=100)
 
 
 # -----------------------------
-# 4) Resumen compacto adicional
+# 4) Additional compact summary
 # -----------------------------
 summary_compact <- df2 %>%
   mutate(
@@ -196,57 +184,80 @@ summary_compact <- df2 %>%
     
     solvation_energy_median = median(solvation_energy, na.rm = TRUE),
     solvation_energy_p10 = quantile(solvation_energy, 0.10, na.rm = TRUE),
-    
-    solvation_density_median = median(solvation_density, na.rm = TRUE),
-    solvation_density_p10 = quantile(solvation_density, 0.10, na.rm = TRUE),
-    solvation_density_p90 = quantile(solvation_density, 0.90, na.rm = TRUE),
     .groups = "drop"
   )
 
 summary_compact
 
 # -----------------------------
-# 5) (Opcional) mirar correlación tamaño vs energía
+# 5) (Optional) look at the size vs energy correlation
 # -----------------------------
 df2 %>%
   summarise(
-    cor_area_solv = cor(interface_area, solvation_energy, use = "complete.obs"),
-    cor_area_density = cor(interface_area, solvation_density, use = "complete.obs")
+    cor_area_solv = cor(interface_area, solvation_energy, use = "complete.obs")
   )
 
 # -----------------------------
-# 6) (Opcional) histogramas rápidos
+# 6) (Optional) quick histograms
 # -----------------------------
 hist(df2$p_value, breaks = 100, main = "p_value", xlab = "p_value")
 hist(df2$interface_area, breaks = 100, main = "interface_area", xlab = "interface_area")
 hist(df2$solvation_energy, breaks = 100, main = "solvation_energy", xlab = "solvation_energy")
-hist(df2$solvation_density, breaks = 100, main = "solvation_density", xlab = "solvation_energy / interface_area")
 
-#La densidad energética (solvation_energy / interface_area) es casi independiente del tamaño
-# (ver correlación con el tamaño, -0.024)
+# Entries without R-free are excluded (there is no cross-validated statistic of the
+# refinement); report how many, so the exclusion is explicit.
+no_rfree <- df2 %>%
+  filter(is.na(r_free), if (is.null(qf$exptl_method)) TRUE else exptl_method == qf$exptl_method)
+cat(sprintf("\nExcluded for missing R-free: %d candidate pairs in %d entries\n",
+            nrow(no_rfree), n_distinct(no_rfree$pdb_id)))
 
-# FILTRADO
-df_filt <- df2 %>%
+# Scope (config `scope`): release-date cut-off, membrane proteins and antibodies.
+# Antibody chains are always flagged; their pairs are dropped only on request.
+sc <- cfg$scope
+as_flag <- function(x) toupper(trimws(as.character(x))) %in% c("TRUE", "T", "1")
+has_source <- function(x, sources) {
+  vapply(strsplit(ifelse(is.na(x), "", as.character(x)), ";", fixed = TRUE),
+         function(v) any(v %in% sources), logical(1))
+}
+membrane_sources <- unlist(sc$exclude_membrane)
+df2 <- df2 %>%
   mutate(
-    solvation_density = solvation_energy / interface_area
-  ) %>%
+    .in_date = if (is.null(sc$max_release_date)) TRUE else
+      !is.na(initial_release_date) &
+      as.Date(as.character(initial_release_date)) <= as.Date(as.character(sc$max_release_date)),
+    .membrane = has_source(molA_membrane_sources, membrane_sources) |
+      has_source(molB_membrane_sources, membrane_sources),
+    .antibody = as_flag(molA_is_antibody) | as_flag(molB_is_antibody)
+  )
+cat(sprintf(paste0("Scope: %d pairs released after the cut-off (%s); %d with a membrane-protein chain ",
+                   "(%s, excluded); %d with an antibody chain (%s)\n"),
+            sum(!df2$.in_date), if (is.null(sc$max_release_date)) "none" else as.character(sc$max_release_date),
+            sum(df2$.membrane), if (length(membrane_sources)) paste(membrane_sources, collapse = ", ") else "none",
+            sum(df2$.antibody), if (isTRUE(sc$exclude_antibodies)) "excluded" else "flagged only"))
+
+# FILTERING
+df_filt <- df2 %>%
   filter(
-    # coverage_metric: "coverage" (resolved / SEQRES) o "internal_coverage"
+    .in_date,
+    !.membrane,
+    if (isTRUE(sc$exclude_antibodies)) !.antibody else TRUE,
+    !is.na(r_free),
+    # coverage_metric: "coverage" (resolved / SEQRES) or "internal_coverage"
     .data[[paste0("molA_", qf$coverage_metric)]] > qf$min_coverage,
     .data[[paste0("molB_", qf$coverage_metric)]] > qf$min_coverage,
     r_free < qf$max_r_free,
-    # filtros opcionales: null en el config = desactivado
+    # optional filters: null in the config = disabled
     if (is.null(qf$max_resolution)) TRUE else resolution <= qf$max_resolution,
     p_value <= qf$max_p_value,
     if (is.null(qf$exptl_method)) TRUE else exptl_method == qf$exptl_method,
     molA_seq_len > qf$min_chain_length, molA_seq_len <= qf$max_chain_length,
     molB_seq_len > qf$min_chain_length, molB_seq_len <= qf$max_chain_length,
     interface_area > qf$min_interface_area,
-    interface_area <= qf$max_interface_area,
-    if (is.null(qf$max_solvation_density)) TRUE else solvation_density < qf$max_solvation_density
+    interface_area <= qf$max_interface_area
   )
 
 df_filt <- df_filt %>%
+  select(-starts_with(".")) %>%
   mutate(tier = if_else(p_value < qf$gold_max_p_value, "gold", "silver"))
 
 table(df_filt$tier)
@@ -257,9 +268,9 @@ summary(df_filt$interface_area)
 summary(df_filt$solvation_energy)
 
 
-# HISTOGRAMAS
-# Histogramas rápidos de variables de calidad
-par(mfrow = c(2, 3))  # 2 filas x 3 columnas
+# HISTOGRAMS
+# Quick histograms of quality variables
+par(mfrow = c(2, 3))  # 2 rows x 3 columns
 
 hist(df_filt$molA_coverage_pct,
      breaks = 50,
@@ -296,19 +307,12 @@ hist(df_filt$interface_area,
      col = "plum",
      border = "white")
 
-hist(df_filt$solvation_density,
-     breaks = 50,
-     main = "solvation_density",
-     xlab = "solvation_energy / interface_area",
-     col = "lightsalmon",
-     border = "white")
-
 par(mfrow = c(1, 1))  # reset
 
 df = df_filt
 
 # ---------
-# Normalizar is_homo a lógico TRUE/FALSE
+# Normalise is_homo to logical TRUE/FALSE
 # ---------
 to_bool <- function(x) {
   x <- as.character(x)
@@ -326,15 +330,15 @@ to_bool <- function(x) {
 
 df[, is_homo_bool := to_bool(is_homo)]
 
-# Comprobar que ahora sí tiene sentido
-cat("\n=== tabla is_homo original ===\n")
+# Check that it makes sense now
+cat("\n=== original is_homo table ===\n")
 print(table(df$is_homo, useNA = "ifany"))
 
-cat("\n=== tabla is_homo_bool normalizada ===\n")
+cat("\n=== normalised is_homo_bool table ===\n")
 print(table(df$is_homo_bool, useNA = "ifany"))
 
 # ---------
-# función resumen
+# summary function
 # ---------
 summ_len <- function(x) {
   x <- x[!is.na(x)]
@@ -353,23 +357,23 @@ summ_len <- function(x) {
 }
 
 # ---------
-# cadenas individuales
+# individual chains
 # ---------
 all_lengths <- c(df$molA_seq_len, df$molB_seq_len)
 
-cat("\n=== GENERAL (cadenas individuales) ===\n")
+cat("\n=== GENERAL (individual chains) ===\n")
 print(summ_len(all_lengths))
 
 homo_lengths <- c(df[is_homo_bool == TRUE,  molA_seq_len],
                   df[is_homo_bool == TRUE,  molB_seq_len])
 
-cat("\n=== HOMO (cadenas individuales) ===\n")
+cat("\n=== HOMO (individual chains) ===\n")
 print(summ_len(homo_lengths))
 
 hetero_lengths <- c(df[is_homo_bool == FALSE, molA_seq_len],
                     df[is_homo_bool == FALSE, molB_seq_len])
 
-cat("\n=== HETERO (cadenas individuales) ===\n")
+cat("\n=== HETERO (individual chains) ===\n")
 print(summ_len(hetero_lengths))
 
 

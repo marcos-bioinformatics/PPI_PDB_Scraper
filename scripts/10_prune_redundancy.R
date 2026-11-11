@@ -4,14 +4,18 @@ suppressPackageStartupMessages({
 })
 
 # ============================================================
-# Pair-cluster prune v3
-# - Exact dedupe opcional
-# - Pruning ligero/modificable en pair_cluster_98 o pair_cluster_95
-# - Sin has_special
-# - Sin nres_range_thr
-# - Diversidad geométrica basada en interface_area
-# - Ranking por coverage_pct -> p_value -> area -> r_free -> resolution -> solvation
-# - Auditorías profundas before/after
+# Step 10 - Redundancy: exact-pair cap + optional pair-cluster pruning
+# - Optional exact dedupe (pruning.exact_dedup_mode, exact_K_*); the kept rows
+#   come from distinct entries where possible
+# - Pair-cluster pruning (pruning.cluster_pruning, off by default): clusters of
+#   pruning.pair_key with more than activate_n rows are reduced. With it off,
+#   every distinct sequence pair (point mutants included) is kept and family
+#   weights are exported instead (step 12).
+# - No has_special
+# - No nres_range_thr
+# - Geometric diversity based on interface_area
+# - Ranking by coverage_pct -> p_value -> area -> r_free -> resolution -> solvation
+# - Detailed before/after audits
 # ============================================================
 
 source(file.path("scripts", "common.R"))
@@ -22,7 +26,7 @@ df <- read.csv(cfg$paths$clustered) %>%
   select(-matches("^Unnamed"))
 
 # -----------------------------
-# 0) Helpers robustos
+# 0) Robust helpers
 # -----------------------------
 as_num <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
@@ -50,7 +54,8 @@ mk_pair_key <- function(a, b) paste(pmin(a, b), pmax(a, b), sep = "||")
 # -----------------------------
 # 1) Ensure IDs + aliases
 # -----------------------------
-ensure_ids_and_clusters <- function(df, use_label_asym = FALSE, thrs = c(98,95,90,80,70,60,50,40)) {
+ensure_ids_and_clusters <- function(df, use_label_asym = FALSE,
+                                    thrs = sub("^pair_cluster_c", "", grep("^pair_cluster_c[0-9]+$", names(df), value = TRUE))) {
   chainA <- if (use_label_asym) "molA_label_asym_id" else "molA_chain_id"
   chainB <- if (use_label_asym) "molB_label_asym_id" else "molB_chain_id"
   
@@ -112,13 +117,13 @@ ensure_ids_and_clusters <- function(df, use_label_asym = FALSE, thrs = c(98,95,9
 
 # -----------------------------
 # 2) Quality ranking
-#    Prioridad:
-#    1) coverage mínima (%) entre A/B
-#    2) p_value menor
-#    3) interface_area mayor
-#    4) r_free menor
-#    5) resolution menor
-#    6) solvation_energy más negativo
+#    Priority:
+#    1) minimum coverage (%) of A/B
+#    2) lower p_value
+#    3) larger interface_area
+#    4) lower r_free
+#    5) lower resolution
+#    6) more negative solvation_energy
 # -----------------------------
 rank_quality <- function(g) {
   covA_pct <- if ("molA_coverage_pct" %in% names(g)) as_num(g$molA_coverage_pct) else 100 * as_num(g$molA_coverage)
@@ -139,18 +144,18 @@ rank_quality <- function(g) {
       .cov_min_pct = ifelse(is.infinite(.cov_min_pct), NA_real_, .cov_min_pct)
     ) %>%
     arrange(
-      desc(coalesce(.cov_min_pct, -Inf)),   # mayor coverage mínima
-      coalesce(.p_value_num, Inf),          # p_value menor
-      desc(coalesce(.area_num, -Inf)),      # área mayor
-      coalesce(.r_free_num, Inf),           # r_free menor
-      coalesce(.res_num, Inf),              # resolución menor
-      coalesce(.solv_num, Inf)              # más negativo = mejor
+      desc(coalesce(.cov_min_pct, -Inf)),   # higher minimum coverage
+      coalesce(.p_value_num, Inf),          # lower p_value
+      desc(coalesce(.area_num, -Inf)),      # larger area
+      coalesce(.r_free_num, Inf),           # lower r_free
+      coalesce(.res_num, Inf),              # lower resolution
+      coalesce(.solv_num, Inf)              # more negative = better
     ) %>%
     select(-starts_with("."))
 }
 
 # -----------------------------
-# 3) Exact dedupe (opcional)
+# 3) Exact dedupe (optional)
 # -----------------------------
 dedupe_exact_pairs <- function(df,
                                mode = c("none", "keep1", "softcap"),
@@ -166,23 +171,31 @@ dedupe_exact_pairs <- function(df,
   
   if (mode == "none") return(df)
   
-  # Una sola ordenación global por calidad (arrange es estable) y después los
-  # K primeros de cada par exacto: mismo resultado que group_modify por grupo,
-  # pero en segundos en lugar de minutos.
+  # A single global sort by quality (arrange is stable), then the first K of
+  # each exact pair: same result as group_modify per group, but in seconds
+  # instead of minutes.
+  # The K rows come from K different entries when possible: the best row of
+  # each entry goes first (copies of the same crystal, e.g. NCS copies, are
+  # not independent observations), then the rest by quality.
   out <- rank_quality(df) %>%
+    group_by(pair_seq_exact, pdb_id) %>%
+    mutate(.entry_rank = row_number()) %>%
+    ungroup() %>%
+    arrange(.entry_rank) %>%
     group_by(pair_seq_exact) %>%
     filter(row_number() <= if (mode == "keep1") 1L
                            else if (any(is_homo01 == 1L, na.rm = TRUE)) K_homo
                            else K_heter) %>%
     ungroup() %>%
+    select(-.entry_rank) %>%
     arrange(pair_seq_exact) %>%
-    relocate(pair_seq_exact)   # mismo orden de filas y columnas que group_modify
+    relocate(pair_seq_exact)   # same row and column order as group_modify
   
   out
 }
 
 # -----------------------------
-# 4) Diversidad geométrica por interface_area
+# 4) Geometric diversity by interface_area
 # -----------------------------
 select_cover_bins_area <- function(g, K, nbins = 4L, area_col = "interface_area") {
   if (nrow(g) <= K) return(rank_quality(g))
@@ -230,7 +243,7 @@ select_cover_bins_area <- function(g, K, nbins = 4L, area_col = "interface_area"
 }
 
 # -----------------------------
-# 5) Auditorías
+# 5) Audits
 # -----------------------------
 ppi_profile <- function(df, label = "df") {
   chains_inst <- unique(c(df$chain_instance_id_A, df$chain_instance_id_B))
@@ -382,17 +395,17 @@ top_groups <- function(df, key, n = 20) {
 }
 
 # -----------------------------
-# 6) Función principal
+# 6) Main function
 # -----------------------------
 prune_pair_cluster_single_step_v3 <- function(df,
                                               pair_key = "pair_cluster_98",
                                               
-                                              # exact dedupe opcional
+                                              # optional exact dedupe
                                               exact_dedup_mode = c("none", "softcap", "keep1"),
                                               exact_K_homo = 1L,
                                               exact_K_heter = 2L,
                                               
-                                              # pruning params (si NULL, usa defaults según pair_key)
+                                              # pruning params (if NULL, defaults depend on pair_key)
                                               activate_n = NULL,
                                               area_range_pct_thr = 4.0,
                                               
@@ -468,7 +481,7 @@ prune_pair_cluster_single_step_v3 <- function(df,
   
   base_cols_no_key <- setdiff(names(df), pair_key)
   
-  # Solo los clusters activos pasan por group_modify; el resto se conserva tal cual
+  # Only the active clusters go through group_modify; the rest are kept as they are
   active_keys <- cl_stats[[pair_key]][cl_stats$active]
   passive <- df %>%
     filter(!(.data[[pair_key]] %in% active_keys)) %>%
@@ -495,7 +508,7 @@ prune_pair_cluster_single_step_v3 <- function(df,
     }) %>%
     ungroup()
   
-  # mismo orden que group_modify sobre todos los clusters (arrange es estable)
+  # same order as group_modify over all the clusters (arrange is stable)
   kept <- bind_rows(passive, kept_active) %>%
     arrange(.data[[pair_key]])
   
@@ -578,11 +591,12 @@ prune_pair_cluster_single_step_v3 <- function(df,
 }
 
 # ============================================================
-# 7) USO RECOMENDADO
+# 7) RECOMMENDED USE
 # ============================================================
 
-# A) Pruning local en pair_cluster_98
-#    Los parámetros a null en el config no se pasan: la función usa su valor por defecto
+# A) Exact-pair cap and, if pruning.cluster_pruning, pruning of large pair clusters
+#    Parameters set to null in the config are not passed: the function uses its default
+pair_levels <- grep("^pair_cluster_[0-9]+$", names(df), value = TRUE)
 args98 <- list(
   df,
   pair_key = pr$pair_key,
@@ -593,13 +607,15 @@ args98 <- list(
   exact_K_heter = int_or_null(pr$exact_K_heter),
   
   # pruning
-  activate_n = int_or_null(pr$activate_n),
+  activate_n = if (isTRUE(pr$cluster_pruning)) int_or_null(pr$activate_n) else .Machine$integer.max,
   area_range_pct_thr = pr$area_range_pct_thr,
   
   K_redund_homo = int_or_null(pr$K_redund_homo),
   K_redund_heter = int_or_null(pr$K_redund_heter),
   K_var_homo = int_or_null(pr$K_var_homo),
-  K_var_heter = int_or_null(pr$K_var_heter)
+  K_var_heter = int_or_null(pr$K_var_heter),
+  audit_pair_keys = pair_levels,
+  audit_chain_thr = sub("^pair_cluster_", "", pair_levels)
 )
 res98 <- do.call(prune_pair_cluster_single_step_v3, args98[!vapply(args98, is.null, logical(1))])
 
@@ -617,40 +633,7 @@ res98$audits$quality_summary
 res98$audits$top_pair_clusters_before
 res98$audits$top_pair_clusters_after
 
-# La columna auxiliar .area no forma parte de la salida
+# The auxiliary column .area is not part of the output
 df_after98 <- res98$df_after %>% select(-any_of(".area"))
 
 write.csv(df_after98, ensure_parent(cfg$paths$pruned), row.names = FALSE)
-
-# B) Pruning más amplio en pair_cluster_95, solo para comparar (no se guarda).
-#    Duplica el tiempo del paso; se activa con pruning.compare_pair_cluster_95.
-if (isTRUE(pr$compare_pair_cluster_95)) {
-  res95 <- prune_pair_cluster_single_step_v3(
-    df,
-    pair_key = "pair_cluster_95",
-    
-    # exact dedupe
-    exact_dedup_mode = "softcap",
-    exact_K_homo = 2L,
-    exact_K_heter = 4L,
-    
-    # pruning
-    activate_n = 12L,
-    area_range_pct_thr = 4.0,
-    
-    K_redund_homo = 2L,
-    K_redund_heter = 4L,
-    K_var_homo = 6L,
-    K_var_heter = 10L
-  )
-  
-  print(res95$pruning_summary)
-  print(res95$audits$profile)
-  print(res95$audits$homo)
-  print(res95$audits$pair_exact_repeats)
-  print(res95$audits$pair_clusters_multi)
-  print(res95$audits$chain_clusters_multi)
-  print(res95$audits$quality_summary)
-  print(res95$audits$top_pair_clusters_before)
-  print(res95$audits$top_pair_clusters_after)
-}

@@ -7,7 +7,8 @@ Output: paths.ids             canonical, de-duplicated ID list
         paths.pisa_dir/       {subdir}/{id}_assembly{n}_interfaces.json.gz (PISA-lite,
                               gzipped on download: ~10x smaller)
         paths.pisa_manifest   one row per (pdb_id, assembly_id) found in PDBe, with
-                              status and the PDBe file date, plus IDs without PISA data
+                              status, the PDBe file date and the entry's first
+                              assembly, plus IDs without PISA data
 
 PDBe stores the PISA bulk files by the two middle characters of the ID
 (1abc -> ab/). Each needed folder listing is fetched once, so every assembly of
@@ -19,7 +20,9 @@ The PDBe dump can keep files of assemblies that no longer exist after an entry
 was revised. With pisa.only_current_assemblies, the current assembly IDs of
 each entry are read from the RCSB Data API (GraphQL, batches of 1000 IDs):
 outdated assemblies are listed as "stale" and entries RCSB no longer serves as
-"obsolete", and neither is downloaded.
+"obsolete", and neither is downloaded. first_assembly is the lowest current
+assembly ID of the entry (RCSB), or the lowest one in PDBe without that option;
+step 03 uses it when assemblies.selection is "first".
 
 Downloads are atomic and resumable. A file on disk is kept unless PDBe has a
 newer version (PISA is recomputed when an entry is revised). The step stops
@@ -137,21 +140,27 @@ def main() -> None:
     status = dict(zip(todo, run_threaded(fetch, todo, workers, "PISA JSON")))
 
     # 4) Manifest (also the Snakemake "done" marker, so it is written last)
+    first_asm: Dict[str, int] = {}
+    for pid, asm in available:
+        first_asm[pid] = min(asm, first_asm.get(pid, asm))
+    if current is not None:
+        first_asm = {pid: min(current[pid]) for pid in first_asm if current.get(pid)}
+
     rows = []
     for key in sorted(available):
         pid, asm = key
         state = state_of(pid, asm)
         if state == "current":
             state = "ok" if status[key] in ("ok", "skip") else "error"
-        rows.append((pid, asm, state, status.get(key, ""), available[key]))
+        rows.append((pid, asm, state, status.get(key, ""), available[key], first_asm.get(pid, "")))
     with_data = {pid for pid, _ in available}
-    rows += [(pid, "", "no_pisa_data", "", "") for pid in ids if pid not in with_data]
+    rows += [(pid, "", "no_pisa_data", "", "", "") for pid in ids if pid not in with_data]
 
     manifest = ensure_parent(paths["pisa_manifest"])
     tmp = manifest.with_name(manifest.name + ".part")
     with tmp.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        w.writerow(["pdb_id", "assembly_id", "status", "download", "pdbe_date"])
+        w.writerow(["pdb_id", "assembly_id", "status", "download", "pdbe_date", "first_assembly"])
         w.writerows(rows)
     tmp.replace(manifest)
 

@@ -1,5 +1,5 @@
 # =============================================================================
-# PPI_PDB_Scrapper pipeline configuration
+# PPI_PDB_Scraper pipeline configuration
 #
 # Every step (Python and R) reads its parameters from this file, so this is
 # the only place you need to edit. Paths are relative to the repository root.
@@ -11,6 +11,23 @@
 # Folder with the PDB ID lists exported from RCSB Advanced Search
 # (.txt or .txt.gz; IDs separated by commas, whitespace or one per line).
 input_dir: pdb_ids
+
+# --- Scope -------------------------------------------------------------------
+scope:
+  # Provenance of input_dir: the RCSB Advanced Search query that produced the ID
+  # lists (path to its JSON, or the search URL) and the date it was run. Copied
+  # to reports/provenance.json; not used to filter.
+  input_query: null
+  input_query_date: null       # YYYY-MM-DD
+  # Keep only entries first released on or before this date (YYYY-MM-DD), so a
+  # later rerun gives the same entries; null = no cut-off.
+  max_release_date: null
+  # Drop pairs with a chain that any of these RCSB annotation sources marks as a
+  # membrane protein (PDBTM, OPM, MemProtMD, mpstruc); [] keeps them.
+  exclude_membrane: [PDBTM]
+  # Antibody chains (SAbDab annotation in RCSB) are always flagged in the output
+  # (molA_is_antibody, molB_is_antibody); true also drops their pairs.
+  exclude_antibodies: false
 
 # --- Resources ---------------------------------------------------------------
 workers: 6              # parallel processes for the parsing steps (02, 06, 08, 13)
@@ -34,6 +51,12 @@ pisa:
   min_interface_area: 800      # interface_area >= this (A^2 buried per side)
   max_p_value: 0.5             # PISA Delta-iG P-value <= this (<0.5: more hydrophobic than random)
 
+# --- 03 Assemblies ----------------------------------------------------------
+assemblies:
+  # first: only the first biological assembly of each entry (lowest current
+  #   assembly ID, as AlphaFold 3 and PINDER); all: every assembly PISA analysed.
+  selection: first
+
 # --- 01, 04 RCSB ---------------------------------------------------------------
 rcsb:
   download_url: https://files.rcsb.org/download   # {id}-assembly{n}.cif.gz
@@ -55,34 +78,52 @@ quality_filter:
                                # (resolved / span between first and last resolved residue,
                                # i.e. disordered tags and tails do not count)
   min_coverage: 0.86           # both chains: coverage metric > this
-  min_chain_length: 39         # both chains: length > this (at least 40 residues; Seq8 used 12)
-  max_chain_length: 600        # both chains: length <= this
+  min_chain_length: 39         # both chains: length > this (at least 40 residues, the peptide/protein
+                               # boundary of PISCES and PINDER; Seq8 used 12)
+  max_chain_length: 1000       # both chains: length <= this (set by the model to be trained)
   max_p_value: 0.4             # p_value <= this
   min_interface_area: 800      # interface_area > this
   max_interface_area: 5400     # interface_area <= this
-  max_solvation_density: null  # solvation_energy / interface_area < this (Seq8 used -0.0068)
   gold_max_p_value: 0.2        # tier "gold" if p_value < this, else "silver"
 
 # --- 08 Structure checks -----------------------------------------------------
 special_residues:
-  allowed: [MSE, SEM, SEC]     # non-standard polymer residues tolerated in a chain
+  allowed: [MSE, SEC]          # non-standard polymer residues tolerated in a chain (selenomethionine,
+                               # selenocysteine); any other residue drops the chain
   ignore: [ACE, NH2]           # terminal caps, neither counted nor forbidden
 contacts:
-  cutoff: 4.5                  # heavy-atom distance (A) that defines a contact
+  cutoff: 5.0                  # heavy-atom distance (A) that defines a contact (AlphaFold 3 interface definition)
   min_residue_contacts: 1      # positives need at least this many residue pairs in contact
+  clash_distance: 1.7          # clashes: atoms of a chain closer than this to the other chain (A)
+  max_clash_fraction: 0.30     # exclude pairs where a chain has more than this fraction of its atoms in
+                               # clashes (AlphaFold 3 rule); null = report only
+  interface_gap_window: 2      # interface gaps: unresolved residues within this many positions of an
+                               # interface residue (molA_/molB_interface_gaps, always reported)
+  max_interface_gaps: null     # exclude pairs with more gaps than this on either side; null = report only
+
+# --- 08b Small interfaces: biological or crystal (PRODIGY-cryst) -------------
+prodigy:
+  filter: true                 # drop the pairs below max_area that PRODIGY-cryst calls crystal (XTAL);
+                               # needs the prodigy_cryst environment (envs/prodigy_cryst.yml);
+                               # false = no filter (step 09 then reads the output of step 08)
+  max_area: 1000               # A^2 per side; with the 800 of quality_filter, the band 800-1000
 
 # --- 09 Chain clustering (MMseqs2) -------------------------------------------
 clustering:
   # connected_components: single-linkage clusters from one all-vs-all search; no
   #   two sequences of different clusters are similar above the threshold
-  #   (leak-free cluster splits). set_cover: MMseqs2 cluster/linclust (Seq8).
+  #   (leak-free cluster splits). set_cover: MMseqs2 cluster/linclust (Seq8); despite the
+  #   name, with cov_mode 1 or 2 MMseqs2 clusters greedily (CD-HIT-like), not by set cover.
   method: connected_components
-  thresholds: [0.98, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40]
+  # The levels the other steps read must be present (step 09 checks them):
+  # test_set.level, splits.schemes, the hard-negative levels and pruning.pair_key
+  # if cluster_pruning is on. More levels can be added as annotations.
+  thresholds: [0.95, 0.90, 0.60, 0.40, 0.30]
   coverage: 0.90               # alignment coverage required to link two sequences
   cov_mode: 1                  # 0: both chains covered; 1/2: either (pairs are searched both ways);
                                # passed to MMseqs2 --cov-mode by set_cover
   search_sensitivity: 7.5      # connected_components: MMseqs2 -s (higher finds more remote homologues)
-  evalue: 1.0e-3               # MMseqs2 -e; very short chains cannot reach it (hence min_chain_length)
+  evalue: 1.0e-3               # MMseqs2 -e
   max_seqs: 20000              # candidate hits kept per sequence; must exceed the largest family
                                # (antibody chains: thousands) or links are lost and clusters leak
   engine: cluster              # set_cover: "cluster" (sensitive) or "linclust" (fast)
@@ -92,46 +133,51 @@ clustering:
 #    exact_K_homo / exact_K_heter rows (ranked by coverage, p-value, area, R-free,
 #    resolution, solvation energy). Point mutants are different sequence pairs,
 #    so they are not affected by this cap.
-# 2) Pair clusters (pair_key) with more than activate_n rows are pruned: to
-#    K_redund_* rows if their interface areas are within area_range_pct_thr % of
-#    the mean, otherwise to K_var_* rows spread over interface-area bins.
-#    pair_cluster_98 groups pairs whose two chains are >= 98 % identical, i.e. it
-#    also groups point mutants and variants with a few substitutions. To keep
-#    mutant series, raise activate_n (e.g. 1000000 disables this step) or K_*.
-# For a strictly non-redundant set, set every K to 1.
+#    The K rows come from distinct entries where possible.
+# 2) Optional (cluster_pruning, off by default): pair clusters (pair_key) with
+#    more than activate_n rows are pruned to K_redund_* rows if their interface
+#    areas are within area_range_pct_thr % of the mean, otherwise to K_var_* rows
+#    spread over interface-area bins. A pair cluster groups point mutants and
+#    variants of the same complex, so this stage removes them too. With it off,
+#    every distinct sequence pair is kept and large families are down-weighted
+#    instead (splits.weight_exponent).
+# For a strictly non-redundant set, enable cluster_pruning and set every K to 1.
 pruning:
-  pair_key: pair_cluster_98
   exact_dedup_mode: softcap    # "softcap" (K rows), "keep1" or "none"
   exact_K_homo: 2
   exact_K_heter: 4
+  cluster_pruning: false
+  pair_key: pair_cluster_95
   activate_n: 8
   area_range_pct_thr: 4.0
   K_redund_homo: 2
   K_redund_heter: 4
   K_var_homo: 4
   K_var_heter: 8
-  compare_pair_cluster_95: false   # also run (and print) a broader pruning in pair_cluster_95, for comparison only
 
 # --- 11 Test set (R) ---------------------------------------------------------
+# The three classes of Park and Marcotte (2012), with a protein "seen" if its
+# chain cluster at `level` has a row in training: C3 neither protein seen, C2
+# one, C1 both but not the pair (no training pair joins homologues of both).
 test_set:
   seed: 7
-  n_c3_40: 100
-  n_c3_50: 100
-  n_c1: 300
-  n_c2_c70: 100
-  n_c2_c80: 100
-  nbins_len: 4
-  nbins_area: 4
-  homo_frac: 0.5
-  c3_mult: 12
-  c2_chain_cap_98_global: 1
-  c2_pick: random              # C2 representative of each pair cluster: random, best or worst quality (Seq8: worst)
+  level: 0.40                  # identity of the clusters that define seen proteins and pairs (AlphaFold 3:
+                               # low homology below 40 %); must be one of clustering.thresholds
+  n_c3: 300                    # pairs with both proteins unseen
+  n_c2: 300                    # pairs with one protein unseen (hetero by definition)
+  n_c1: 150                    # pairs of seen proteins, unseen pair
+  homo_frac: 0.5               # target share of homo pairs in each class; the other kind fills it if short
+  max_cluster_rows: 50         # only chain clusters (C2, C3) and pair clusters (C1) with at most this many
+                               # rows are held out, so that no large family is emptied from training
 
 # --- 12 Train/validation splits (R) ------------------------------------------
 splits:
+  schemes: [0.60, 0.40]        # one train/validation split per pair-cluster level (split_c60, split_c40)
   val_frac: 0.10
-  seed: 48
-  validation_split: split_c90  # split column exported as the validation set
+  seed: 48                     # the i-th scheme uses seed + i
+  validation_split: split_c40  # split exported as validation.csv; family weights are computed on it
+  weight_exponent: 0.5         # family_weight = 1 / n^exponent, n = rows of the pair cluster in training
+                               # (0.5: a family of n rows weighs sqrt(n); 1: every family weighs the same)
 
 # --- 13 Hard negatives -------------------------------------------------------
 # Two protein chains of the same biological assembly with no PISA interface
@@ -139,14 +185,19 @@ splits:
 hard_negatives:
   enabled: true
   include_homo: false          # also identical-sequence pairs (usually contradict a homo contact)
-  conflict_level: c40          # drop a negative if its pair of chain clusters (c98, c95, ... c40 or
-                               # "exact" sequences) is in contact in any downloaded assembly; homologues
-                               # above ~30-40 % identity tend to interact in the same way
+  conflict_level: c40          # drop a negative if its pair of chain clusters (c95, c90, ... c30 or
+                               # "exact" sequences) is in contact in any downloaded assembly (a
+                               # precaution: close homologues of an interacting pair may also interact)
   min_distance: 6.0            # minimum heavy-atom distance between the two chains (A)
   max_distance: null           # optional maximum (A), e.g. 12 to keep only near-miss pairs
   max_per_pair_cluster: 4      # at most this many negatives per pair cluster across entries
-  pair_cluster_key: c98        # (the same complex deposited many times would dominate)
+  pair_cluster_key: c95        # (the same complex deposited many times would dominate)
   max_per_entry: 5             # random sample per PDB entry (large complexes would dominate)
+  intact:                      # cross-check with IntAct (PSICQUIC); needs UniProt accessions (step 04)
+    enabled: true
+    url: https://www.ebi.ac.uk/Tools/webservices/psicquic/intact/webservices/current/search/query/
+    drop_direct: true          # drop negatives with binary IntAct evidence of direct interaction (MI:0407 or
+                               # descendants); association / physical association is expected and kept
   family_level: c40            # negatives of the same pair cluster at this level share one split
                                # (in every scheme); match conflict_level so test negatives have no
                                # homologue in training at that identity
@@ -168,19 +219,26 @@ paths:
   structures_manifest: "{data_dir}/raw/structures_manifest.tsv"
   audit: "{data_dir}/reports/05_audit_downloads.json"
   entry_metadata: "{data_dir}/interim/04_entry_metadata.csv"
+  entity_metadata: "{data_dir}/interim/04_entity_metadata.csv"
   chain_metadata: "{data_dir}/interim/06_chain_metadata.csv"
   enriched: "{data_dir}/interim/06_enriched.csv"
   quality_filtered: "{data_dir}/interim/07_quality_filtered.csv"
   quality_plots: "{data_dir}/reports/07_quality_filter_plots.pdf"
   checked: "{data_dir}/interim/08_checked.csv"
+  prodigy_filtered: "{data_dir}/interim/08b_checked.csv"
+  prodigy_band: "{data_dir}/interim/08b_prodigy_band.csv"
   clustering_dir: "{data_dir}/interim/09_mmseqs"
   clustered: "{data_dir}/interim/09_clustered.csv"
   pruned: "{data_dir}/interim/10_pruned.csv"
   trainval_pool: "{data_dir}/interim/11_trainval_pool.csv"
+  test_reserved: "{data_dir}/interim/11_reserved_clusters.csv"
   test: "{data_dir}/processed/test.csv"
   trainval_splits: "{data_dir}/processed/trainval_splits.csv"
   validation: "{data_dir}/processed/validation.csv"
   hard_negatives: "{data_dir}/processed/hard_negatives.csv"
+  intact_cache: "{data_dir}/raw/intact_psicquic.json"
   leakage_audit: "{data_dir}/reports/14_leakage_audit.json"
+  provenance: "{data_dir}/reports/provenance.json"
+  prodigy_cryst: "{data_dir}/reports/prodigy_cryst.csv"
   reports_dir: "{data_dir}/reports"
   logs_dir: "{data_dir}/logs"

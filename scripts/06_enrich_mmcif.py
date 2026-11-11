@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Step 06 - Enrich every candidate pair with mmCIF data (entry + chain level).
 
-Input : paths.master_selected (step 03), assembly mmCIF files and
-        paths.entry_metadata (step 04)
+Input : paths.master_selected (step 03), assembly mmCIF files,
+        paths.entry_metadata and paths.entity_metadata (step 04)
 Output: paths.enriched         master rows + sequence, coverage, homo/hetero and entry metadata
         paths.chain_metadata   one row per protein chain of every needed assembly
 
@@ -12,13 +12,16 @@ the assembly file, including symmetry copies such as "A-2".
 Per chain (assembly file, first model):
   seq                canonical sequence of its entity (_entity_poly)
   seqres_count       residues in _pdbx_poly_seq_scheme
-  resolved_count     polymer residues with at least one non-hydrogen atom
-                     (ATOM or HETATM, so MSE counts as resolved)
+  resolved_count     polymer residues with at least one non-hydrogen atom of
+                     occupancy > 0 (ATOM or HETATM, so MSE counts as resolved);
+                     atoms with zero occupancy are not part of the
+                     experimental model (PDBx groups them with unobserved residues)
   coverage           resolved_count / seqres_count
   internal_coverage  resolved_count / residues between the first and last
                      resolved ones (ignores disordered tags and tails)
   missing_nterm/_cterm  unresolved residues before the first / after the last
                      resolved residue
+  uniprot_ids, membrane_sources, is_antibody   RCSB annotations of the chain's entity (step 04)
 
 seq_identity: identical residues of a global alignment with free end gaps
 (BLOSUM62) divided by the length of the shorter chain, so a truncated construct
@@ -49,10 +52,11 @@ from common import ensure_parent, get_logger, open_mmcif, parse_args, pisa_subdi
 log = get_logger("06_enrich_mmcif")
 
 CHUNK = 500
-CACHE_VERSION = 2  # bump when parse_assembly() output changes
+CACHE_VERSION = 3  # bump when parse_assembly() output changes
 CHAIN_FIELDS = ["entity_id", "seq", "seq_len", "seqres_count_chain", "resolved_count",
                 "missing_residues", "coverage", "coverage_pct",
-                "internal_coverage", "missing_nterm", "missing_cterm"]
+                "internal_coverage", "missing_nterm", "missing_cterm",
+                "uniprot_ids", "membrane_sources", "is_antibody"]
 
 
 # -----------------------------------------------------------------------------
@@ -93,10 +97,13 @@ def parse_assembly(task: Tuple[str, int, str, bool]) -> Tuple[List[Dict[str, Any
         models = as_list(mm.get("_atom_site.pdbx_PDB_model_num"))
         first_model = models[0] if models else None
         resolved = defaultdict(set)
+        occupancy = as_list(mm.get("_atom_site.occupancy"))
         for i, (chain, seq_id, elem) in enumerate(zip(as_list(mm.get("_atom_site.auth_asym_id")),
                                                       as_list(mm.get("_atom_site.label_seq_id")),
                                                       as_list(mm.get("_atom_site.type_symbol")))):
-            if seq_id in (".", "?") or (ignore_h and elem.upper() == "H"):
+            if seq_id in (".", "?") or (ignore_h and elem.upper() in ("H", "D")):
+                continue
+            if occupancy and occupancy[i] not in (".", "?") and float(occupancy[i]) <= 0:
                 continue
             if models and models[i] != first_model:
                 continue
@@ -215,9 +222,14 @@ def main() -> None:
     log.info("Assembly files on disk: %d/%d", len(asm_tasks), len(pairs))
 
     entry_df = pd.read_csv(paths["entry_metadata"], keep_default_na=False, na_values=[""], dtype={"pdb_id": str})
+    entity_df = pd.read_csv(paths["entity_metadata"], keep_default_na=False, na_values=[""],
+                            dtype={"pdb_id": str, "entity_id": str, "uniprot_ids": str, "membrane_sources": str})
     chain_df, errors = run_cached("assembly", parse_assembly, asm_tasks, parts_dir, workers)
     errors_path = Path(paths["reports_dir"]) / "06_mmcif_parse_errors.tsv"
     ensure_parent(errors_path).write_text("".join(e + "\n" for e in errors), encoding="utf-8")
+    chain_df = chain_df.merge(entity_df, on=["pdb_id", "entity_id"], how="left", validate="many_to_one")
+    chain_df[["uniprot_ids", "membrane_sources"]] = chain_df[["uniprot_ids", "membrane_sources"]].fillna("")
+    chain_df["is_antibody"] = chain_df["is_antibody"].fillna(False).astype(bool)
     chain_df.to_csv(ensure_parent(paths["chain_metadata"]), index=False)
 
     # --- merge: chain data for A and B, then entry metadata ------------------

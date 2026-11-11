@@ -5,19 +5,19 @@ library(data.table)
 source(file.path("scripts", "common.R"))
 cfg <- load_config()
 
-# Carga de master_pisa.csv con todos los interfaces
+# Load master_pisa.csv with all the interfaces
 df = read.csv(cfg$paths$master_pisa)
 
-# FIltrado con los 164k PDB_IDs extraidos y descargados del PDB
+# Filter to the PDB IDs extracted and downloaded from the PDB
 
-# df ya cargado:
+# df already loaded:
 setDT(df)
 df[, pdb_id := tolower(pdb_id)]
 
-# Cargar la lista canónica de PDB IDs (generada en el paso 01)
+# Load the canonical list of PDB IDs (generated in step 01)
 txts <- cfg$paths$ids
 
-# Lee tokens robustamente (separadores: espacios, comas, tabs, saltos)
+# Read tokens robustly (separators: spaces, commas, tabs, newlines)
 read_ids <- function(f) {
   x <- readLines(f, warn = FALSE)
   x <- unlist(strsplit(x, "[,[:space:]]+"))
@@ -26,28 +26,37 @@ read_ids <- function(f) {
 }
 
 pdb_ok <- unique(unlist(lapply(txts, read_ids)))
-# Filtrar a 4 chars y formato PDB (primer char dígito)
+# Keep 4-character IDs in PDB format (first character a digit)
 pdb_ok <- pdb_ok[nchar(pdb_ok) == 4 & grepl("^[0-9][a-z0-9]{3}$", pdb_ok)]
 
-# Filtrar master
-df_164k <- df[pdb_id %in% pdb_ok]
-length(unique(df_164k$pdb_id))
+# Filter master
+df_sel <- df[pdb_id %in% pdb_ok]
 
-# Guardar
-fwrite(df_164k, ensure_parent(cfg$paths$master_selected))
+# Assembly selection: "first" keeps only the first biological assembly of each
+# entry (its lowest current assembly ID, recorded by step 01), as AlphaFold 3 and
+# PINDER do; "all" keeps every assembly that PISA analysed.
+selection <- cfg$assemblies$selection
+if (!selection %in% c("first", "all")) stop("assemblies.selection must be 'first' or 'all'")
+if (selection == "first") {
+  man <- fread(cfg$paths$pisa_manifest, colClasses = list(character = "pdb_id"))
+  man[, first_assembly := suppressWarnings(as.integer(first_assembly))]
+  first_asm <- unique(man[!is.na(first_assembly), .(pdb_id = tolower(pdb_id), assembly_id = first_assembly)])
+  n_before <- uniqueN(df_sel$pdb_id)
+  rows_before <- nrow(df_sel)
+  df_sel <- df_sel[first_asm, on = .(pdb_id, assembly_id), nomatch = NULL]
+  cat(sprintf("assemblies.selection = first: %d of %d candidate rows kept; %d of %d entries have candidates in their first assembly\n",
+              nrow(df_sel), rows_before, uniqueN(df_sel$pdb_id), n_before))
+}
 
-need_pairs <- unique(df_164k[, .(pdb_id, assembly_id)])
+# Save
+fwrite(df_sel, ensure_parent(cfg$paths$master_selected))
+
+need_pairs <- unique(df_sel[, .(pdb_id, assembly_id)])
 fwrite(need_pairs, ensure_parent(cfg$paths$needed_pairs))
 
-# ¿Cuántos pdb tienen >1 assembly en el master?
+# How many PDB entries have >1 assembly in the master?
 multi <- need_pairs[, .N, by=pdb_id][N > 1]
-nrow(multi)
 
-# ¿Qué assembly_ids distintos aparecen?
-sort(unique(need_pairs$assembly_id))
-
-# si ya tienes need_pairs en memoria
+# if you already have need_pairs in memory
 need_pairs_extra <- need_pairs[assembly_id != 1]
-nrow(need_pairs_extra)                 # <- objetivo real de descargas extra
-need_pairs_extra[, .N, by=assembly_id][order(assembly_id)]
 

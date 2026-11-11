@@ -13,6 +13,11 @@ pair when both are proteins and
 These are permissive pre-filters (they decide which structures are downloaded);
 the final thresholds are applied in step 07 and can only be stricter.
 Assembly-level metrics come from the assembly block of the same file.
+
+molA_/molB_interface_residues: residues of each molecule with buried surface
+area > 0 in the interface (PISA per-residue buried_surface_areas). PISA-lite's
+number_interface_residues is the length of one molecule's residue list, not an
+interface count; it is kept as number_interface_residues_raw.
 """
 
 from __future__ import annotations
@@ -34,7 +39,7 @@ from common import ensure_parent, get_logger, parse_args, pisa_subdir, read_json
 log = get_logger("02_parse_pisa")
 
 INTERFACE_INT_KEYS = [
-    "number_interface_residues", "number_hydrogen_bonds", "number_salt_bridges",
+    "number_hydrogen_bonds", "number_salt_bridges",
     "number_disulfide_bonds", "number_covalent_bonds", "number_other_bonds",
 ]
 ASSEMBLY_KEYS = [
@@ -43,7 +48,8 @@ ASSEMBLY_KEYS = [
 ]
 COLUMNS = (
     ["pdb_id", "assembly_id", "interface_id", "pair_index_in_interface",
-     "interface_area", "p_value", "solvation_energy", "stabilization_energy"]
+     "interface_area", "p_value", "solvation_energy", "stabilization_energy",
+     "molA_interface_residues", "molB_interface_residues", "number_interface_residues_raw"]
     + INTERFACE_INT_KEYS
     + ["protein_molecule_count", "other_molecule_count",
        "molA_molecule_id", "molA_molecule_class", "molA_chain_id",
@@ -65,6 +71,11 @@ def to_int(x: Any) -> Optional[int]:
         return None if x is None else int(x)
     except (TypeError, ValueError):
         return None
+
+
+def interface_residues(molecule: Dict[str, Any]) -> int:
+    """Residues of a molecule with buried surface area > 0 in the interface."""
+    return sum(1 for x in molecule.get("buried_surface_areas") or [] if (to_float(x) or 0.0) > 0)
 
 
 def assembly_record(path: Path, pdb_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -117,6 +128,9 @@ def parse_assembly(task) -> Tuple[List[Dict[str, Any]], Counter, Optional[str]]:
                     "p_value": p_value,
                     "solvation_energy": to_float(itf.get("solvation_energy")),
                     "stabilization_energy": to_float(itf.get("stabilization_energy")),
+                    "molA_interface_residues": interface_residues(a),
+                    "molB_interface_residues": interface_residues(b),
+                    "number_interface_residues_raw": to_int(itf.get("number_interface_residues")),
                     **{k: to_int(itf.get(k)) for k in INTERFACE_INT_KEYS},
                     "protein_molecule_count": len(proteins),
                     "other_molecule_count": len(molecules) - len(proteins),

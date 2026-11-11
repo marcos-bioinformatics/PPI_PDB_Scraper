@@ -32,6 +32,13 @@ def main() -> None:
     needed = pd.read_csv(paths["needed_pairs"], dtype={"pdb_id": str})
     files = pd.read_csv(paths["structures_manifest"], sep="\t", dtype={"pdb_id": str, "assembly_id": str})
     meta = pd.read_csv(paths["entry_metadata"], dtype={"pdb_id": str})
+    selection = cfg["assemblies"]["selection"]
+    if selection == "first":
+        first = pisa.dropna(subset=["first_assembly"])[["pdb_id", "first_assembly"]].drop_duplicates()
+        first = first.rename(columns={"first_assembly": "assembly_id"}).astype({"assembly_id": int})
+        expected = master.merge(first, on=["pdb_id", "assembly_id"])
+    else:
+        expected = master
 
     files["on_disk"] = [Path(p).is_file() for p in files["path"]]
     missing = files[~files["on_disk"]]
@@ -54,8 +61,11 @@ def main() -> None:
             "assemblies": int(len(master.drop_duplicates())),
         },
         "needed_pairs": int(len(needed)),
-        # entries with candidate pairs that step 03 did not keep (should be 0)
-        "entries_lost_in_step_03": int(len(set(master["pdb_id"]) - set(needed["pdb_id"]))),
+        "assembly_selection": selection,
+        # entries whose candidate pairs are all in assemblies other than the first
+        "entries_without_candidates_in_first_assembly": int(len(set(master["pdb_id"]) - set(expected["pdb_id"]))),
+        # entries with candidate pairs that step 03 should have kept but did not (should be 0)
+        "entries_lost_in_step_03": int(len(set(expected["pdb_id"]) - set(needed["pdb_id"]))),
         "assembly_files": {
             "needed": int(len(files)),
             "on_disk": int(files["on_disk"].sum()),

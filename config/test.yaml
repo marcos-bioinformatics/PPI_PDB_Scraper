@@ -8,8 +8,6 @@ input_dir: tests/pdb_ids
 data_dir: data_test
 
 test_set:
-  n_c3_40: 10
-  n_c3_50: 10
-  n_c1: 30
-  n_c2_c70: 10
-  n_c2_c80: 10
+  n_c3: 30
+  n_c2: 20
+  n_c1: 10

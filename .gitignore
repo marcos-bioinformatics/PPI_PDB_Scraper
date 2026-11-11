@@ -2,12 +2,15 @@
 data/
 data_test/
 
-# Your own RCSB ID exports (keep the folder, not the lists)
+# Your own RCSB ID exports (keep the folder, not the lists); the 17 lists of the
+# reference run are tracked
 pdb_ids/*.txt
 pdb_ids/*.txt.gz
+!pdb_ids/rcsb_pdb_ids_3a503b9773c88f93a8929f488ddabe29_*.txt.gz
 
 # Snakemake
 .snakemake/
+dag.svg
 
 # Python / R / IDE
 __pycache__/

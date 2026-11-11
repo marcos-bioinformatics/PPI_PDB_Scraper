@@ -1,219 +1,26 @@
 # =============================================================================
-# Train/validation split + family weighting protocol
+# Step 12 - Train/validation splits by pair cluster, and family weights
 #
-# This script builds cluster-aware train/validation splits from the final
-# trainval pool obtained after:
-#   (i) structural/biophysical filtering,
-#   (ii) exact pair deduplication,
-#   (iii) light pruning at pair_cluster_98,
-#   (iv) removal of the external test set (C1/C2/C3).
+# Input : paths.trainval_pool (step 11: everything not in the test set)
+# Output: paths.trainval_splits  one row per pair with a split column per scheme
+#         paths.validation       rows marked "val" in splits.validation_split
 #
-# The goal is to evaluate model development under validation schemes with
-# increasing homology separation, while preserving a realistic homo/hetero
-# composition and avoiding cluster leakage between train and validation.
+# One independent train/validation split per level in splits.schemes (e.g.
+# 0.60 -> split_c60, built on pair_cluster_60). Whole pair clusters go to one
+# side, so no training pair joins homologues of both chains of a validation
+# pair at that identity. Within each homo/hetero stratum (majority of the
+# cluster's rows), clusters are shuffled with a fixed seed (splits.seed + i for
+# the i-th scheme) and taken until about splits.val_frac of the rows are in
+# validation.
 #
-# -----------------------------------------------------------------------------
-# OVERVIEW
-# -----------------------------------------------------------------------------
-#
-# Three independent train/validation splits are created:
-#
-#   1) split_c90  -> validation defined at pair_cluster_90
-#   2) split_c80  -> validation defined at pair_cluster_80
-#   3) split_c60  -> validation defined at pair_cluster_60
-#
-# These three splits provide progressively harder validation settings:
-#
-#   - split_c90 is the main / default split and is the closest to the training
-#     distribution while still being cluster-aware.
-#
-#   - split_c80 is an intermediate robustness split, useful to test whether
-#     model improvements survive a stricter pair-homology separation.
-#
-#   - split_c60 is the hardest validation split among the three and is mainly
-#     intended as a stronger generalization / robustness check rather than the
-#     default split for day-to-day model development.
-#
-# -----------------------------------------------------------------------------
-# SPLIT CONSTRUCTION PRINCIPLE
-# -----------------------------------------------------------------------------
-#
-# Each split is built at the level of complete pair clusters, not individual
-# rows. This is critical: all rows belonging to the same pair_cluster_X are
-# assigned together to either train or validation. This guarantees:
-#
-#   - zero pair-cluster overlap between train and validation
-#   - cluster-disjoint validation sets
-#   - no leakage of homologous pairs across train/val at the chosen threshold
-#
-# Validation is targeted to approximately 10% of rows (VAL_FRAC = 0.10).
-#
-# -----------------------------------------------------------------------------
-# HOMO / HETERO STRATIFICATION
-# -----------------------------------------------------------------------------
-#
-# To preserve the global composition of the dataset, the split is stratified by
-# homomeric vs heteromeric character. However, stratification is performed at
-# the cluster level, not the row level:
-#
-#   - for each pair cluster, the fraction of rows labeled is_homo01 == 1 is
-#     computed
-#   - the cluster is assigned a majority-based stratum:
-#
-#         cluster_stratum = 1 if cluster_homo_frac >= 0.5
-#         cluster_stratum = 0 otherwise
-#
-# Clusters are then selected for validation within each stratum until the
-# target validation size is approximately reached.
-#
-# This preserves the homo/hetero balance while keeping cluster assignments
-# atomic and leakage-free.
-#
-# -----------------------------------------------------------------------------
-# GREEDY CLUSTER SELECTION
-# -----------------------------------------------------------------------------
-#
-# Within each stratum, clusters are shuffled with a fixed seed and selected
-# greedily until the validation target is reached (or slightly approximated).
-# The decision to include or skip a cluster is based on closeness to the target
-# number of validation rows, rather than simply taking clusters in arbitrary
-# order.
-#
-# This produces:
-#
-#   - validation fractions very close to the desired target
-#   - strong homo/hetero balance preservation
-#   - fully cluster-disjoint train and validation subsets
-#
-# -----------------------------------------------------------------------------
-# FAMILY WEIGHTING
-# -----------------------------------------------------------------------------
-#
-# In addition to the train/validation splits, the script computes a family
-# weight based on pair_cluster_90:
-#
-#   family_weight_c90 = 1 / sqrt(cluster_size_train_c90)
-#
-# where cluster_size_train_c90 is the size of the corresponding pair_cluster_90
-# measured using ONLY the TRAIN subset of split_c90.
-#
-# This is important:
-#
-#   - validation rows are not used to define training-family sizes
-#   - weighting reflects redundancy structure actually seen during training
-#   - large families are downweighted without being removed
-#
-# If a pair_cluster_90 appears only in validation and not in training (rare but
-# possible), its training cluster size is set to 1 to avoid missing values or
-# infinite weights.
-#
-# Interpretation:
-#
-#   - singleton train cluster      -> weight = 1.0
-#   - cluster of size 4            -> weight = 0.5
-#   - cluster of size 9            -> weight ~ 0.333
-#   - cluster of size 100          -> weight = 0.1
-#
-# This weighting is intended to reduce family dominance while preserving
-# examples from recurrent families, and is consistent with the overall strategy
-# adopted for dataset curation:
-#
-#   exact dedupe + light pruning + inverse-family downweighting
-#
-# -----------------------------------------------------------------------------
-# WHY THREE SPLITS?
-# -----------------------------------------------------------------------------
-#
-# The three splits support different experimental goals:
-#
-#   split_c90:
-#     Main model-development split. Best default choice for tuning, ablations,
-#     and model selection.
-#
-#   split_c80:
-#     Robustness split. Tests whether improvements remain under stricter
-#     pair-homology separation.
-#
-#   split_c60:
-#     Hard split. Useful to probe stronger generalization behavior, but not
-#     necessarily the preferred split for routine iteration.
-#
-# In practice:
-#
-#   - split_c90 + family_weight_c90 is the primary training configuration
-#   - split_c80 and split_c60 are secondary validation settings for sensitivity
-#     / robustness analysis
-#
-# -----------------------------------------------------------------------------
-# EXPECTED AUDITS
-# -----------------------------------------------------------------------------
-#
-# The split script should verify at least the following properties:
-#
-#   1) Row counts:
-#        - train / val counts
-#        - realized validation fraction
-#
-#   2) Homo/hetero composition:
-#        - global homo fraction
-#        - validation homo fraction
-#
-#   3) Quality comparability:
-#        - coverage
-#        - p_value
-#        - r_free
-#        - interface_area
-#
-#   4) Cluster integrity:
-#        - unique clusters in train
-#        - unique clusters in val
-#        - zero overlap between train and val at the chosen cluster threshold
-#
-#   5) Validation cluster-size profile:
-#        - number of validation clusters
-#        - cluster-size quantiles (p50, p90, p95, p99, max)
-#        - singleton fraction
-#        - fraction of validation rows belonging to clusters of size > 1
-#
-#   6) Weight distribution:
-#        - summary of cluster_size_train_c90
-#        - summary of family_weight_c90
-#
-# -----------------------------------------------------------------------------
-# FINAL INTERPRETATION
-# -----------------------------------------------------------------------------
-#
-# The resulting objects have the following roles:
-#
-#   split_c90 / split_c80 / split_c60:
-#     Cluster-aware train/validation labels for three homology thresholds.
-#
-#   cluster_size_train_c90:
-#     Size of each pair_cluster_90 measured only on the TRAIN subset of
-#     split_c90.
-#
-#   family_weight_c90:
-#     Per-row family weight derived from the corresponding train-side
-#     pair_cluster_90 size.
-#
-# Recommended usage:
-#
-#   - default training / model selection:
-#         use split_c90 + family_weight_c90
-#
-#   - robustness checks:
-#         repeat with split_c80 and split_c60
-#
-# This setup allows clean comparison of:
-#
-#   - model architecture changes
-#   - effect of family downweighting
-#   - dependence of performance on homology separation strength
-#
-# while keeping the validation protocol leakage-free and biologically
-# interpretable.
+# Family weight, computed on the scheme exported as validation
+# (splits.validation_split, e.g. split_c40 on pair_cluster_40):
+#   cluster_size_train_cXX = rows of the pair cluster in the training side
+#                            (1 for clusters absent from training)
+#   family_weight_cXX      = 1 / cluster_size_train_cXX ^ splits.weight_exponent
+# With the default exponent 0.5 a family of n rows weighs sqrt(n) in total; 1
+# gives every family the same weight. Using the weight is up to the user.
 # =============================================================================
-
 
 library(data.table)
 
@@ -251,7 +58,7 @@ make_split_by_cluster_stratified <- function(
   
   DT[, (out_col) := "train"]
   
-  # trabajar a nivel cluster, no a nivel fila
+  # work at cluster level, not at row level
   clust_dt <- DT[!is.na(get(cluster_col)), .(
     cluster_n = .N,
     cluster_homo_frac = mean(get(strat_col), na.rm = TRUE)
@@ -266,7 +73,7 @@ make_split_by_cluster_stratified <- function(
     sub <- clust_dt[cluster_stratum == s]
     if (nrow(sub) == 0L) next
     
-    # target en filas, no en número de clusters
+    # target in rows, not in number of clusters
     target_val <- round(val_frac * sum(sub$cluster_n))
     
     sub <- sub[sample(.N)]
@@ -329,111 +136,76 @@ audit_split <- function(DT, split_col, cluster_col, strat_col = "is_homo01") {
 
 df <- fread(IN_CSV, na.strings = c("", "NA"))
 setDT(df)
-if (nrow(df) == 0L) stop("El pool de train/val está vacío: revisa el paso 11")
+if (nrow(df) == 0L) stop("The train/val pool is empty: check step 11")
 
 stopifnot("row_id" %in% names(df))
 stopifnot(uniqueN(df$row_id) == nrow(df))
 
-# usar is_homo01 si ya existe; si no, derivarlo
+# use is_homo01 if it already exists; otherwise derive it
 if (!("is_homo01" %in% names(df))) {
-  stop("Falta is_homo01 en el input.")
+  stop("is_homo01 is missing from the input.")
 }
 df[, is_homo01 := to_homo01(is_homo01)]
 
-# Splits
-make_split_by_cluster_stratified(
-  df,
-  cluster_col = "pair_cluster_90",
-  out_col = "split_c90",
-  strat_col = "is_homo01",
-  val_frac = VAL_FRAC,
-  seed = SEED_MASTER + 0L
-)
+# Splits: one scheme per level of splits.schemes
+tag_of <- function(x) sprintf("c%02d", as.integer(round(as.numeric(x) * 100)))
+schemes <- vapply(unlist(cfg$splits$schemes), tag_of, character(1))
+if (length(schemes) == 0L) stop("splits.schemes is empty")
+for (i in seq_along(schemes)) {
+  col <- paste0("pair_cluster_", sub("^c", "", schemes[i]))
+  if (!col %in% names(df)) stop(sprintf("%s missing: add %s to clustering.thresholds", col, unlist(cfg$splits$schemes)[i]))
+  make_split_by_cluster_stratified(df, cluster_col = col, out_col = paste0("split_", schemes[i]),
+                                   strat_col = "is_homo01", val_frac = VAL_FRAC, seed = SEED_MASTER + i - 1L)
+}
 
-make_split_by_cluster_stratified(
-  df,
-  cluster_col = "pair_cluster_80",
-  out_col = "split_c80",
-  strat_col = "is_homo01",
-  val_frac = VAL_FRAC,
-  seed = SEED_MASTER + 1L
-)
+# Family weight on the training side of the exported scheme
+SPLIT_FOR_WEIGHT <- cfg$splits$validation_split
+if (!SPLIT_FOR_WEIGHT %in% names(df)) stop(sprintf("splits.validation_split (%s) is not one of the schemes", SPLIT_FOR_WEIGHT))
+w_tag <- sub("^split_", "", SPLIT_FOR_WEIGHT)
+WEIGHT_CLUSTER_COL <- paste0("pair_cluster_", sub("^c", "", w_tag))
+size_col <- paste0("cluster_size_train_", w_tag)
+weight_col <- paste0("family_weight_", w_tag)
+cl_sizes <- df[get(SPLIT_FOR_WEIGHT) == "train", .N, by = c(WEIGHT_CLUSTER_COL)]
+setnames(cl_sizes, "N", size_col)
+df <- merge(df, cl_sizes, by = WEIGHT_CLUSTER_COL, all.x = TRUE, sort = FALSE)
+df[is.na(get(size_col)), (size_col) := 1L]
+df[, (weight_col) := 1.0 / get(size_col)^as.numeric(cfg$splits$weight_exponent)]
 
-make_split_by_cluster_stratified(
-  df,
-  cluster_col = "pair_cluster_60",
-  out_col = "split_c60",
-  strat_col = "is_homo01",
-  val_frac = VAL_FRAC,
-  seed = SEED_MASTER + 2L
-)
-
-# Weighting basado en pair_cluster_90, calculado SOLO con TRAIN de split_c90
-SPLIT_FOR_WEIGHT <- "split_c90"
-WEIGHT_CLUSTER_COL <- "pair_cluster_90"
-
-stopifnot(SPLIT_FOR_WEIGHT %in% names(df))
-stopifnot(WEIGHT_CLUSTER_COL %in% names(df))
-
-train_dt <- df[get(SPLIT_FOR_WEIGHT) == "train", .(pair_cluster_90)]
-cl_sizes <- train_dt[, .N, by = pair_cluster_90]
-setnames(cl_sizes, "N", "cluster_size_train_c90")
-
-df <- merge(df, cl_sizes, by = "pair_cluster_90", all.x = TRUE, sort = FALSE)
-df[is.na(cluster_size_train_c90), cluster_size_train_c90 := 1L]
-
-df[, family_weight_c90 := 1.0 / sqrt(cluster_size_train_c90)]
-
-# Guardar
-fwrite(df, OUT_CSV)
-
+# Save
+# The aliases of step 10 (pair_cluster_XX, A_cluster_XX, B_cluster_XX) and the columns that repeat
+# another one (is_homo01 and is_homo_80 = is_homo; coverage_pct = 100 x coverage) stay internal (the audits
+# below use them); the exported tables keep the cluster columns of step 09 (pair_cluster_cXX).
+ALIAS_COLS <- grep("^(pair_cluster_[0-9]+|[AB]_cluster_[0-9]+|is_homo01|is_homo_80|mol[AB]_coverage_pct)$", names(df), value = TRUE)
+fwrite(df[, !ALIAS_COLS, with = FALSE], OUT_CSV)
 cat("OK ->", OUT_CSV, "\n")
 
 # Validation set: rows marked "val" in the chosen split
-df_val <- df[get(cfg$splits$validation_split) == "val"]
+df_val <- df[get(SPLIT_FOR_WEIGHT) == "val"]
 df_val[, `:=`(test_bucket = "VAL", test_subbucket = "VAL")]
-fwrite(df_val, ensure_parent(cfg$paths$validation))
+fwrite(df_val[, !ALIAS_COLS, with = FALSE], ensure_parent(cfg$paths$validation))
 cat("OK ->", cfg$paths$validation, "(", nrow(df_val), "rows )\n")
 
-cat("\n=== AUDIT split_c90 ===\n")
-a90 <- audit_split(df, "split_c90", "pair_cluster_90")
-print(a90$counts)
-cat("homo global:", a90$homo_frac_global, "\n")
-cat("homo val:", a90$homo_frac_val, "\n")
-cat("val frac real:", a90$val_frac_real, "\n")
-cat("unique clusters train:", a90$unique_clusters_train, "\n")
-cat("unique clusters val:", a90$unique_clusters_val, "\n")
-print(a90$quality)
+for (sc in schemes) {
+  cat(sprintf("\n=== AUDIT split_%s ===\n", sc))
+  a <- audit_split(df, paste0("split_", sc), paste0("pair_cluster_", sub("^c", "", sc)))
+  print(a$counts)
+  cat("homo global:", a$homo_frac_global, "\n")
+  cat("homo val:", a$homo_frac_val, "\n")
+  cat("val frac real:", a$val_frac_real, "\n")
+  cat("unique clusters train:", a$unique_clusters_train, "\n")
+  cat("unique clusters val:", a$unique_clusters_val, "\n")
+  print(a$quality)
+}
 
-cat("\n=== AUDIT split_c80 ===\n")
-a80 <- audit_split(df, "split_c80", "pair_cluster_80")
-print(a80$counts)
-cat("homo global:", a80$homo_frac_global, "\n")
-cat("homo val:", a80$homo_frac_val, "\n")
-cat("val frac real:", a80$val_frac_real, "\n")
-cat("unique clusters train:", a80$unique_clusters_train, "\n")
-cat("unique clusters val:", a80$unique_clusters_val, "\n")
-print(a80$quality)
-
-cat("\n=== AUDIT split_c60 ===\n")
-a60 <- audit_split(df, "split_c60", "pair_cluster_60")
-print(a60$counts)
-cat("homo global:", a60$homo_frac_global, "\n")
-cat("homo val:", a60$homo_frac_val, "\n")
-cat("val frac real:", a60$val_frac_real, "\n")
-cat("unique clusters train:", a60$unique_clusters_train, "\n")
-cat("unique clusters val:", a60$unique_clusters_val, "\n")
-print(a60$quality)
-
-cat("\nFamily weight (c90) resumen:\n")
-print(summary(df$family_weight_c90))
-print(summary(df$cluster_size_train_c90))
+cat(sprintf("\nFamily weight (%s, exponent %s):\n", w_tag, cfg$splits$weight_exponent))
+print(summary(df[[weight_col]]))
+print(summary(df[[size_col]]))
 
 
 # =============================================================================
 # EXTRA AUDITS
-# A) overlap de clusters entre train y val
-# B) distribución de tamaños de cluster en val
+# A) cluster overlap between train and val
+# B) cluster size distribution in val
 # =============================================================================
 
 audit_cluster_overlap <- function(DT, split_col, cluster_col) {
@@ -493,18 +265,12 @@ audit_val_cluster_sizes <- function(DT, split_col, cluster_col) {
   )
 }
 
-# ---- correr para c90 / c80 / c60
-overlap_audits <- rbindlist(list(
-  audit_cluster_overlap(df, "split_c90", "pair_cluster_90"),
-  audit_cluster_overlap(df, "split_c80", "pair_cluster_80"),
-  audit_cluster_overlap(df, "split_c60", "pair_cluster_60")
-), use.names = TRUE, fill = TRUE)
-
-val_cluster_size_audits <- rbindlist(list(
-  audit_val_cluster_sizes(df, "split_c90", "pair_cluster_90"),
-  audit_val_cluster_sizes(df, "split_c80", "pair_cluster_80"),
-  audit_val_cluster_sizes(df, "split_c60", "pair_cluster_60")
-), use.names = TRUE, fill = TRUE)
+# ---- for each scheme
+pc_of <- function(sc) paste0("pair_cluster_", sub("^c", "", sc))
+overlap_audits <- rbindlist(lapply(schemes, function(sc) audit_cluster_overlap(df, paste0("split_", sc), pc_of(sc))),
+                            use.names = TRUE, fill = TRUE)
+val_cluster_size_audits <- rbindlist(lapply(schemes, function(sc) audit_val_cluster_sizes(df, paste0("split_", sc), pc_of(sc))),
+                                     use.names = TRUE, fill = TRUE)
 
 cat("\n=== AUDIT A: CLUSTER OVERLAP TRAIN/VAL ===\n")
 print(overlap_audits)
@@ -512,22 +278,16 @@ print(overlap_audits)
 cat("\n=== AUDIT B: VAL CLUSTER SIZE DISTRIBUTION ===\n")
 print(val_cluster_size_audits)
 
-# opcional: guardar
+# optional: save
 #fwrite(overlap_audits, "audit_cluster_overlap_train_val.csv")
 #fwrite(val_cluster_size_audits, "audit_val_cluster_size_distribution.csv")
 
-# Mostrar clusters solapados exactos
+# Show the exact overlapping clusters
 show_overlap_clusters <- function(DT, split_col, cluster_col) {
   tr <- unique(DT[get(split_col) == "train" & !is.na(get(cluster_col)), get(cluster_col)])
   va <- unique(DT[get(split_col) == "val"   & !is.na(get(cluster_col)), get(cluster_col)])
   inter <- intersect(tr, va)
-  data.table(cluster_id = inter)[1:50]
+  if (length(inter) > 0) print(head(data.table(cluster_id = inter), 50))
 }
 
-ov90 <- show_overlap_clusters(df, "split_c90", "pair_cluster_90")
-ov80 <- show_overlap_clusters(df, "split_c80", "pair_cluster_80")
-ov60 <- show_overlap_clusters(df, "split_c60", "pair_cluster_60")
-
-print(ov90)
-print(ov80)
-print(ov60)
+for (sc in schemes) show_overlap_clusters(df, paste0("split_", sc), pc_of(sc))

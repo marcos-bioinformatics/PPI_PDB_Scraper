@@ -10,7 +10,7 @@ Output: paths.checked                              rows that pass both checks
 For every pair, in its assembly file (first model, author chain IDs as in PISA,
 polymer residues only):
   1. Special residues: the 20 standard amino acids are always allowed;
-     special_residues.allowed (MSE, SEM, SEC by default) are tolerated and
+     special_residues.allowed (MSE, SEC by default) are tolerated and
      counted, special_residues.ignore (terminal caps ACE, NH2) are skipped; any
      other polymer residue (UNK, D-amino acids, chromophores, PTMs, ...) excludes
      the chain. Ligands that share the chain ID are not considered.
@@ -18,6 +18,15 @@ polymer residues only):
      contacts.cutoff A. A pair needs at least contacts.min_residue_contacts
      residue pairs in contact; a PISA interface without real contacts points
      to a chain-mapping problem.
+  3. Clashes: n_clash_atoms (atoms of either chain closer than
+     contacts.clash_distance A to the other chain) and max_clash_fraction (the
+     larger fraction of the two chains). Pairs above contacts.max_clash_fraction
+     are excluded (AlphaFold 3 removes chains with more than 30 % of their atoms
+     within 1.7 A of another chain); null = report only.
+  4. Interface gaps (molA_/molB_interface_gaps): unresolved SEQRES residues
+     within contacts.interface_gap_window positions of an interface residue.
+     Reported for every pair; pairs with more than contacts.max_interface_gaps
+     on either side are excluded only if that value is set (null = report only).
 """
 
 from __future__ import annotations
@@ -31,7 +40,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from common import ensure_parent, get_logger, parse_args, pisa_subdir, write_json
-from structure_checks import contact_summary, fmt_counter, load_chains, special_residues
+from structure_checks import (clash_summary, contact_summary, fmt_counter, interface_gaps, load_chains,
+                              special_residues)
 
 log = get_logger("08_check_structures")
 
@@ -61,7 +71,9 @@ def check_assembly(task: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     for a, b in task["pairs"]:
         if a in model and b in model:
             pairs.append({**base, "molA_chain_id": a, "molB_chain_id": b,
-                          **contact_summary(model[a], model[b], task["cutoff"])})
+                          **contact_summary(model[a], model[b], task["cutoff"]),
+                          **interface_gaps(model[a], model[b], task["cutoff"], task["gap_window"]),
+                          **clash_summary(model[a], model[b], task["clash_distance"])})
     return {"chains": chains, "pairs": pairs}
 
 
@@ -97,7 +109,8 @@ def main() -> None:
         path = asm_dir / pisa_subdir(pid) / f"{pid}-assembly{asm}.cif.gz"
         tasks.append({"pdb_id": pid, "assembly_id": asm, "path": str(path), "chains": sorted(chain_ids),
                       "pairs": sorted(pairs[(pid, asm)]), "allowed": allowed, "ignore": ignore,
-                      "cutoff": float(contacts["cutoff"])})
+                      "cutoff": float(contacts["cutoff"]), "gap_window": int(contacts["interface_gap_window"]),
+                      "clash_distance": float(contacts["clash_distance"])})
     log.info("Checking %d structures for %d rows", len(tasks), len(df))
 
     chain_rows, pair_rows = [], []
@@ -140,11 +153,19 @@ def main() -> None:
     special_ok = out["_molA_keep"].fillna(False).astype(bool) & out["_molB_keep"].fillna(False).astype(bool)
     structure_error = (out["_molA_err"].fillna("missing") != "") | (out["_molB_err"].fillna("missing") != "")
     contacts_ok = out["n_residue_contacts"].fillna(0) >= int(contacts["min_residue_contacts"])
-    keep = special_ok & contacts_ok
+    max_gaps = contacts.get("max_interface_gaps")
+    gaps_ok = (pd.Series(True, index=out.index) if max_gaps is None else
+               (out[["molA_interface_gaps", "molB_interface_gaps"]].fillna(0).max(axis=1) <= int(max_gaps)))
+    max_clash = contacts.get("max_clash_fraction")
+    clash_ok = (pd.Series(True, index=out.index) if max_clash is None else
+                out["max_clash_fraction"].fillna(0) <= float(max_clash))
+    keep = special_ok & contacts_ok & clash_ok & gaps_ok
     excluded = out.loc[~keep, keys + ["molA_chain_id", "molB_chain_id", "molA_special_error",
                                       "molB_special_error", "n_residue_contacts"]].copy()
-    excluded["reason"] = ["structure_error" if e else "special_residues" if not s else "no_contacts"
-                          for e, s in zip(structure_error[~keep], special_ok[~keep])]
+    excluded["reason"] = ["structure_error" if e else "special_residues" if not s else
+                          "no_contacts" if not c else "clashes" if not k else "interface_gaps"
+                          for e, s, c, k in zip(structure_error[~keep], special_ok[~keep], contacts_ok[~keep],
+                                                clash_ok[~keep])]
     excluded.to_csv(ensure_parent(reports / "08_rows_excluded.csv"), index=False)
 
     out = out.loc[keep].drop(columns=[c for c in out.columns if c.startswith("_")])
@@ -158,6 +179,13 @@ def main() -> None:
         "excluded_structure_errors": int(structure_error.sum()),
         "excluded_special_residues": int((~special_ok & ~structure_error).sum()),
         "excluded_no_contacts": int((special_ok & ~contacts_ok).sum()),
+        "excluded_clashes": int((special_ok & contacts_ok & ~clash_ok).sum()),
+        "pairs_with_clashes": int((out["n_clash_atoms"].fillna(0) > 0).sum()),
+        "clash_distance": contacts["clash_distance"], "max_clash_fraction": max_clash,
+        "excluded_interface_gaps": int((special_ok & contacts_ok & clash_ok & ~gaps_ok).sum()),
+        "pairs_with_interface_gaps": int((out[["molA_interface_gaps", "molB_interface_gaps"]].fillna(0)
+                                          .max(axis=1) > 0).sum()),
+        "interface_gap_window": contacts["interface_gap_window"], "max_interface_gaps": max_gaps,
         "chains_scanned": int(len(summary)), "chains_with_forbidden_residues": int((~summary["keep_chain"]).sum()),
         "allowed_special": sorted(allowed), "ignored": sorted(ignore), "contact_cutoff": contacts["cutoff"],
         "min_residue_contacts": contacts["min_residue_contacts"],

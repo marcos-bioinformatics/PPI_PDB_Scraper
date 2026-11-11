@@ -46,7 +46,7 @@ def main() -> None:
         lengths = pd.concat([df["molA_seq_len"], df["molB_seq_len"]])
         check(lengths.min() > qf["min_chain_length"] and lengths.max() <= qf["max_chain_length"],
               f"{name}: chain lengths within ({qf['min_chain_length']}, {qf['max_chain_length']}]")
-        check(df[["molA_seq", "molB_seq", "pair_cluster_90"]].notna().all().all(),
+        check(df[["molA_seq", "molB_seq", "pair_cluster_c90"]].notna().all().all(),
               f"{name}: sequences and clusters present")
         check((df["n_residue_contacts"] >= cfg["contacts"]["min_residue_contacts"]).all(),
               f"{name}: every pair has atomic contacts")
@@ -58,6 +58,14 @@ def main() -> None:
               "hard negatives: chains farther apart than min_distance")
         schemes = [c for c in neg.columns if c.startswith("split_")]
         check(all(neg[c].isin(["train", "val", "test"]).all() for c in schemes), "hard negatives: valid splits")
+
+    if cfg.get("prodigy", {}).get("filter"):
+        band = pd.read_csv(paths["prodigy_band"], dtype=str)
+        final = set(test["row_id"]) | set(tv["row_id"])
+        xtal = set(band.loc[band["prodigy_class"] == "XTAL", "row_id"])
+        bio = set(band.loc[band["prodigy_class"] == "BIO", "row_id"])
+        check(not xtal & final and len(bio & final) > 0,
+              f"PRODIGY-cryst filter: no XTAL pair below {cfg['prodigy']['max_area']} A2 in test or trainval")
 
     audit = json.loads(Path(paths["leakage_audit"]).read_text())["design_threshold_leaks"]
     for name, s in audit.items():

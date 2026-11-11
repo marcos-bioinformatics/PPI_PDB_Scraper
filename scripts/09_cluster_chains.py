@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step 09 - Cluster all chain sequences with MMseqs2 at several identity thresholds.
 
-Input : paths.checked (step 08)
+Input : paths.prodigy_filtered (step 08b) if prodigy.filter is true, else paths.checked (step 08)
 Output: paths.clustered        input rows + molA/molB/pair cluster IDs per threshold
         paths.clustering_dir/  unique_sequences.fasta, cXX/clusters.tsv, summary.txt/json
 
@@ -11,7 +11,7 @@ clustering.method:
         coverage criterion holds, and clusters are the connected components
         (single linkage). No two sequences of different clusters are similar
         above the threshold, so cluster-based splits do not leak homologues.
-  set_cover  MMseqs2 cluster/linclust as in PPI_PDB_Scrapper Seq8: every member is
+  set_cover  MMseqs2 cluster/linclust as in PPI_PDB_Scraper Seq8: every member is
         similar to its representative, but members of different clusters can be
         similar above the threshold.
 
@@ -24,6 +24,7 @@ Unique sequences are identified by sha1(sequence)[:16]. For each threshold XX:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -40,9 +41,16 @@ from common import ensure_parent, get_logger, homology_linked, parse_args, seq_u
 
 log = get_logger("09_cluster_chains")
 
-# Thresholds the later steps rely on (pruning at 98 %, splits at 90/80/60 %,
-# C2 at 70/80 %, C3 at 40/50 %); more thresholds can be added.
-REQUIRED_THRESHOLDS = {0.98, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40}
+def required_levels(cfg: Dict) -> set:
+    """Identity levels that later steps read, from the configuration."""
+    req = {round(float(cfg["test_set"]["level"]), 2)} | {round(float(x), 2) for x in cfg["splits"]["schemes"]}
+    hn = cfg["hard_negatives"]
+    if hn.get("enabled"):
+        req |= {int(str(hn[k])[1:]) / 100 for k in ("conflict_level", "family_level", "pair_cluster_key")
+                if re.fullmatch(r"c\d+", str(hn[k]))}
+    if cfg["pruning"].get("cluster_pruning"):
+        req.add(int(re.search(r"(\d+)$", cfg["pruning"]["pair_key"]).group(1)) / 100)
+    return req
 
 
 def thr_tag(thr: float) -> str:
@@ -152,7 +160,8 @@ def main() -> None:
     out_dir = Path(paths["clustering_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(paths["checked"], keep_default_na=False, na_values=[""],
+    src = paths["prodigy_filtered"] if cfg.get("prodigy", {}).get("filter") else paths["checked"]
+    df = pd.read_csv(src, keep_default_na=False, na_values=[""],
                      dtype={"pdb_id": str, "molA_chain_id": str, "molB_chain_id": str})
 
     uid_a = df["molA_seq"].map(seq_uid)
@@ -167,10 +176,11 @@ def main() -> None:
             fh.write(f">{uid}\n{seq}\n")
 
     method = ccfg["method"]
-    missing = sorted(REQUIRED_THRESHOLDS - {round(float(t), 2) for t in ccfg["thresholds"]})
+    required = required_levels(cfg)
+    missing = sorted(required - {round(float(t), 2) for t in ccfg["thresholds"]})
     if missing:
-        raise SystemExit(f"clustering.thresholds must include {sorted(REQUIRED_THRESHOLDS)} (used by steps "
-                         f"10-14); missing: {missing}")
+        raise SystemExit(f"clustering.thresholds must include {sorted(required)} (read by steps 10-14 with "
+                         f"this configuration); missing: {missing}")
     if method == "connected_components":
         log.info("MMseqs2 all-vs-all search (min-seq-id %.2f, -s %s)", min(ccfg["thresholds"]), ccfg["search_sensitivity"])
         hits = all_vs_all_hits(fasta, out_dir / "search", ccfg, int(cfg["threads"]))

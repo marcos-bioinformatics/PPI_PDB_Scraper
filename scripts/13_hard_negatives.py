@@ -2,7 +2,8 @@
 """Step 13 - Hard negatives: chains of the same assembly that are not in contact.
 
 Input : paths.chain_metadata (06), paths.entry_metadata (04), PISA JSON (01),
-        paths.clustered (09), paths.test (11), paths.trainval_splits (12)
+        paths.clustered (09), paths.test and paths.test_reserved (11),
+        paths.trainval_splits (12)
 Output: paths.hard_negatives                 one row per negative pair, with its split
         reports_dir/13_hard_negatives.json   candidates left after each filter
 
@@ -13,7 +14,8 @@ this order:
   2. both chain sequences present in the clustered positives (step 09), so the
      negative shares the protein universe, cluster IDs and splits of the positives
   3. entry and chain quality: the same method, R-free, resolution, coverage and
-     length thresholds as step 07 (interface thresholds do not apply)
+     length thresholds and the same scope (release date, membrane proteins,
+     antibodies) as step 07 (interface thresholds do not apply)
   4. no conflict: the pair of chain clusters (hard_negatives.conflict_level) is
      not in contact in any downloaded assembly
   5. structure: no forbidden special residues (same rules as step 08) and a
@@ -23,30 +25,44 @@ this order:
   7. at most hard_negatives.max_per_pair_cluster per pair cluster
      (hard_negatives.pair_cluster_key) across entries, then at most
      hard_negatives.max_per_entry per entry (random, seeded)
-Split, for every split scheme of step 12 (split_c90, split_c80, split_c60):
-"test" if a chain appears only in test positives or belongs to a cluster held
-out for the unseen-chain (C3) buckets; else "val" if a chain appears only in
+  8. IntAct (hard_negatives.intact): every UniProt pair of a negative is looked
+     up in IntAct (PSICQUIC, MITAB 2.7). intact_evidences counts its evidences;
+     intact_direct_evidences counts the binary ones (no spoke or matrix
+     expansion) of type direct interaction (MI:0407) or any of its descendants
+     in PSI-MI (read from OLS). Two chains of one complex without contact are
+     expected to have association or physical association evidence; direct
+     evidence contradicts the negative, which is dropped if
+     hard_negatives.intact.drop_direct. Answers are cached, with their date, in
+     paths.intact_cache.
+Split, for every split scheme of step 12 (splits.schemes, e.g. split_c60, split_c40):
+"test" if a chain appears only in test positives or belongs to a chain cluster
+held out of training by step 11 (the unseen proteins of C2 and C3); else "val" if a chain appears only in
 validation positives of that scheme; else "train". Negatives of the same pair
 cluster at hard_negatives.family_level (c40 by default) all get the most
 restrictive split of the group (test > val > train), so a family of negatives
 is never split between sets. Proteins shared by train and test (as
-in the train-like C1 bucket) do not pull a negative into the test set. The
+in C1) do not pull a negative into the test set. The
 column `split` repeats the scheme chosen in splits.validation_split.
 Missing or unreadable PISA files stop the step (they would hide contacts).
 """
 
 from __future__ import annotations
 
+import re
+import time
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
+from urllib.parse import quote
 
 import pandas as pd
+import requests
 from tqdm import tqdm
 
-from common import ensure_parent, get_logger, parse_args, pisa_subdir, read_json, seq_uid, write_json
+from common import ensure_parent, get_logger, make_session, parse_args, pisa_subdir, read_json, seq_uid, write_json
 from structure_checks import contact_summary, load_chains, special_residues
 
 log = get_logger("13_hard_negatives")
@@ -82,6 +98,70 @@ def check_assembly(task: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "molA_chain_id": a, "molB_chain_id": b,
                         **contact_summary(chains[a], chains[b], task["cutoff"])})
     return out
+
+
+MI_0407_DESCENDANTS = ("https://www.ebi.ac.uk/ols4/api/ontologies/mi/terms/"
+                       "http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FMI_0407/hierarchicalDescendants?size=1000")
+
+
+def intact_crosscheck(cand: pd.DataFrame, icfg: Dict, cache_path: Path) -> Tuple[pd.Series, pd.Series, Dict[str, int]]:
+    """IntAct evidences of each negative (all evidences, binary direct ones); NaN if a query failed."""
+    session = make_session(pool_size=4)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cache = read_json(cache_path) if cache_path.is_file() else {}
+    cache.setdefault("pairs", {})
+    if not cache.get("direct_types"):
+        r = session.get(MI_0407_DESCENDANTS, timeout=(10, 120))
+        r.raise_for_status()
+        ids = {t["obo_id"] for t in r.json()["_embedded"]["terms"]} | {"MI:0407"}
+        cache["direct_types"] = {"date": today, "source": "OLS, PSI-MI descendants of MI:0407", "ids": sorted(ids)}
+    direct_types = set(cache["direct_types"]["ids"])
+
+    def acc(x) -> List[str]:
+        return [a for a in str(x).split(";") if a and a != "nan"]
+    row_pairs = [sorted({"|".join(sorted((a, b))) for a in acc(x) for b in acc(y) if a != b})
+                 for x, y in zip(cand["molA_uniprot_ids"], cand["molB_uniprot_ids"])]
+    todo = sorted({p for ps in row_pairs for p in ps} - set(cache["pairs"]))
+
+    def query(pair: str):
+        a, b = pair.split("|")
+        url = icfg["url"].rstrip("/") + "/" + quote(f"id:{a} AND id:{b}") + "?format=tab27"
+        for attempt in range(4):
+            try:
+                r = session.get(url, timeout=(10, 120))
+                if r.status_code == 200:
+                    rows = [line.split("\t") for line in r.text.splitlines() if line.strip()]
+                    return pair, [[(re.findall(r"MI:\d{4}", x[11]) or [""])[0],
+                                   (re.findall(r"MI:\d{4}", x[6]) or [""])[0],
+                                   x[15] if len(x) > 15 else "-"] for x in rows]
+            except requests.RequestException:
+                pass
+            time.sleep(2 ** attempt)
+        return pair, None
+
+    failures = 0
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for pair, rows in ex.map(query, todo):
+            if rows is None:
+                failures += 1
+            else:
+                cache["pairs"][pair] = {"date": today, "rows": rows}
+    write_json(ensure_parent(cache_path), cache)
+
+    def count(pairs, direct_only):
+        if any(p not in cache["pairs"] for p in pairs):
+            return float("nan")
+        rows = [r for p in pairs for r in cache["pairs"][p]["rows"]]
+        if direct_only:
+            rows = [r for r in rows if r[0] in direct_types and r[2] in ("-", "")]
+        return len(rows)
+    evid = pd.Series([count(ps, False) if ps else float("nan") for ps in row_pairs], index=cand.index)
+    direct = pd.Series([count(ps, True) if ps else float("nan") for ps in row_pairs], index=cand.index)
+    stats = {"intact_pairs_queried": len(todo), "intact_query_failures": failures,
+             "negatives_without_uniprot_pair": int(sum(not ps for ps in row_pairs)),
+             "negatives_with_intact_evidence": int((evid > 0).sum()),
+             "negatives_with_direct_evidence": int((direct > 0).sum())}
+    return evid, direct, stats
 
 
 def main() -> None:
@@ -150,17 +230,30 @@ def main() -> None:
 
     # --- 3) entry and chain quality (same thresholds as step 07)
     cols = ["pdb_id", "assembly_id", "chain_id", "entity_id", "seq", "seq_len", "coverage", "coverage_pct",
-            "internal_coverage", "missing_nterm", "missing_cterm"]
+            "internal_coverage", "missing_nterm", "missing_cterm", "uniprot_ids", "membrane_sources", "is_antibody"]
     for side in ("molA", "molB"):
         cand = cand.merge(chains[cols].rename(columns={c: f"{side}_{c}" for c in cols[2:]}),
                           on=["pdb_id", "assembly_id", f"{side}_chain_id"], how="left", validate="many_to_one")
     cand = cand.merge(entries, on="pdb_id", how="left", validate="many_to_one")
-    ok = (cand["exptl_method"] == qf["exptl_method"]) & (cand["r_free"] < qf["max_r_free"])
+    ok = cand["r_free"] < qf["max_r_free"]
+    if qf.get("exptl_method") is not None:
+        ok &= cand["exptl_method"] == qf["exptl_method"]
     if qf.get("max_resolution") is not None:
         ok &= cand["resolution"] <= qf["max_resolution"]
     for side in ("molA", "molB"):
         ok &= (cand[f"{side}_{qf['coverage_metric']}"] > qf["min_coverage"])
         ok &= (cand[f"{side}_seq_len"] > qf["min_chain_length"]) & (cand[f"{side}_seq_len"] <= qf["max_chain_length"])
+    # scope, as in step 07: release-date cut-off, membrane proteins, antibodies (on request)
+    sc = cfg.get("scope") or {}
+    if sc.get("max_release_date") is not None:
+        ok &= pd.to_datetime(cand["initial_release_date"]) <= pd.Timestamp(str(sc["max_release_date"]))
+    sources = set(sc.get("exclude_membrane") or [])
+    for side in ("molA", "molB"):
+        cand[f"{side}_is_antibody"] = cand[f"{side}_is_antibody"].fillna(False).astype(bool)
+        if sources:
+            ok &= ~cand[f"{side}_membrane_sources"].fillna("").str.split(";").map(lambda v: bool(sources & set(v)))
+        if sc.get("exclude_antibodies"):
+            ok &= ~cand[f"{side}_is_antibody"]
     cand = cand[ok.fillna(False)]
     counts["after_quality"] = len(cand)
 
@@ -219,6 +312,19 @@ def main() -> None:
                 .sort_values(["pdb_id", "assembly_id", "molA_chain_id", "molB_chain_id"]))
     counts["final"] = len(cand)
 
+    # --- 8) IntAct cross-check
+    icfg = hn.get("intact") or {}
+    if icfg.get("enabled"):
+        evid, direct, stats = intact_crosscheck(cand, icfg, Path(paths["intact_cache"]))
+        cand["intact_evidences"], cand["intact_direct_evidences"] = evid, direct
+        counts.update(stats)
+        if stats["intact_query_failures"]:
+            log.warning("%d IntAct queries failed; their negatives have no IntAct counts (rerun to retry)",
+                        stats["intact_query_failures"])
+        if icfg.get("drop_direct"):
+            cand = cand[~(cand["intact_direct_evidences"] > 0)]
+        counts["after_intact"] = len(cand)
+
     test = pd.read_csv(paths["test"], keep_default_na=False, na_values=[""], low_memory=False)
     tv = pd.read_csv(paths["trainval_splits"], keep_default_na=False, na_values=[""], low_memory=False)
     split_col = cfg["splits"]["validation_split"]
@@ -227,12 +333,9 @@ def main() -> None:
         return set(df["molA_seq"].map(seq_uid)) | set(df["molB_seq"].map(seq_uid))
 
     test_uids = uids(test)
-    held_out = {t: set() for t in ("c40", "c50") if t in cluster_of}
-    for t in held_out:
-        c3 = test[test["test_subbucket"] == f"unseen_chain_{t}"]
-        held_out[t] = {cluster_of[t].get(u) for u in uids(c3)} - {None}
-
-    held = [any(cluster_of[t].get(u) in held_out[t] for t in held_out for u in (a, b))
+    level_tag = f"c{int(round(float(cfg['test_set']['level']) * 100)):02d}"
+    reserved = set(pd.read_csv(paths["test_reserved"], dtype={"cluster": str})["cluster"])
+    held = [cluster_of[level_tag].get(a) in reserved or cluster_of[level_tag].get(b) in reserved
             for a, b in zip(cand["uidA"], cand["uidB"])]
     rank = {"train": 0, "val": 1, "test": 2}
     group_col = f"pair_cluster_{hn['family_level']}"
@@ -253,7 +356,8 @@ def main() -> None:
         counts.update({f"{scheme}_{k}": int(v) for k, v in cand[scheme].value_counts().items()})
     cand["split"] = cand[split_col]
     cand.insert(4, "label", 0)
-    cand = cand.drop(columns=["uidA", "uidB", "_pair", "_cov"])
+    # coverage_pct repeats coverage x 100; the positives do not export it either
+    cand = cand.drop(columns=["uidA", "uidB", "_pair", "_cov", "molA_coverage_pct", "molB_coverage_pct"])
 
     dest = ensure_parent(paths["hard_negatives"])
     tmp = dest.with_name(dest.name + ".part")

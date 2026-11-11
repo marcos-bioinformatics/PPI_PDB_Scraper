@@ -1,4 +1,4 @@
-name: ppi_pdb_scrapper
+name: ppi_pdb_scraper
 channels:
   - conda-forge
   - bioconda

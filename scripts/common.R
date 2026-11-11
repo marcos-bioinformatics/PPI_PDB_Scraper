@@ -1,4 +1,4 @@
-# Shared helpers for the R steps of the PPI_PDB_Scrapper pipeline.
+# Shared helpers for the R steps of the PPI_PDB_Scraper pipeline.
 # Usage at the top of each R script (run from the repository root):
 #   source(file.path("scripts", "common.R"))
 #   cfg <- load_config()

@@ -1,6 +1,6 @@
-"""PPI_PDB_Scrapper pipeline.
+"""PPI_PDB_Scraper pipeline.
 
-Run from the repository root (conda activate ppi_pdb_scrapper):
+Run from the repository root (conda activate ppi_pdb_scraper):
 
     snakemake -n                                       # dry run: show what would run
     snakemake --cores 8                                # run the whole pipeline
@@ -37,6 +37,8 @@ ID_LISTS = sorted(str(p) for p in Path(C["input_dir"]).iterdir() if p.name.endsw
 PY_COMMON = ["scripts/common.py"]
 STRUCT = PY_COMMON + ["scripts/structure_checks.py"]
 R_COMMON = ["scripts/common.R"]
+# step 09 reads the output of 08b when the PRODIGY-cryst filter is on
+CHECKED = P["prodigy_filtered"] if C["prodigy"]["filter"] else P["checked"]
 
 
 def py(script):
@@ -59,6 +61,7 @@ rule all:
         P["validation"],
         P["hard_negatives"] if C["hard_negatives"]["enabled"] else [],
         P["leakage_audit"],
+        P["provenance"],
 
 
 rule download_pisa:
@@ -95,10 +98,13 @@ rule select_assemblies:
     input:
         P["master_pisa"],
         P["ids"],
+        P["pisa_manifest"],
         code=["scripts/03_select_assemblies.R"] + R_COMMON,
     output:
         P["master_selected"],
         P["needed_pairs"],
+    params:
+        section("assemblies"),
     log:
         f"{LOGS}/03_select_assemblies.log",
     shell:
@@ -112,8 +118,10 @@ rule download_structures:
     output:
         P["structures_manifest"],
         P["entry_metadata"],
+        P["entity_metadata"],
     params:
         section("rcsb"),
+        method=str(C["quality_filter"]["exptl_method"]),
     log:
         f"{LOGS}/04_download_structures.log",
     shell:
@@ -131,6 +139,8 @@ rule audit_downloads:
         code=["scripts/05_audit_downloads.py"] + PY_COMMON,
     output:
         P["audit"],
+    params:
+        section("assemblies"),
     log:
         f"{LOGS}/05_audit_downloads.log",
     shell:
@@ -142,6 +152,7 @@ rule enrich_mmcif:
         P["master_selected"],
         P["structures_manifest"],
         P["entry_metadata"],
+        P["entity_metadata"],
         P["audit"],
         code=["scripts/06_enrich_mmcif.py"] + PY_COMMON,
     output:
@@ -164,7 +175,7 @@ rule quality_filter:
         P["quality_filtered"],
         P["quality_plots"],
     params:
-        section("quality_filter"),
+        section("quality_filter", "scope"),
     log:
         f"{LOGS}/07_quality_filter.log",
     shell:
@@ -187,9 +198,28 @@ rule check_structures:
         py("08_check_structures")
 
 
-rule cluster_chains:
+# Needs the prodigy_cryst environment (envs/prodigy_cryst.yml); runs only with prodigy.filter: true.
+rule prodigy_filter:
     input:
         P["checked"],
+        P["structures_manifest"],
+        code=["scripts/08b_prodigy_filter.py", "scripts/annotate_prodigy_cryst.py"] + PY_COMMON,
+    output:
+        P["prodigy_filtered"],
+        P["prodigy_band"],
+    params:
+        section("prodigy"),
+    threads: C["workers"]
+    log:
+        f"{LOGS}/08b_prodigy_filter.log",
+    shell:
+        f"conda run --no-capture-output -n prodigy_cryst python scripts/08b_prodigy_filter.py --config {CFG_FILE} "
+        "2>&1 | tee {log}"
+
+
+rule cluster_chains:
+    input:
+        CHECKED,
         code=["scripts/09_cluster_chains.py"] + PY_COMMON,
     output:
         P["clustered"],
@@ -224,6 +254,7 @@ rule build_test_set:
     output:
         P["test"],
         P["trainval_pool"],
+        P["test_reserved"],
     params:
         section("test_set"),
     log:
@@ -255,12 +286,13 @@ rule hard_negatives:
         P["structures_manifest"],
         P["clustered"],
         P["test"],
+        P["test_reserved"],
         P["trainval_splits"],
         code=["scripts/13_hard_negatives.py"] + STRUCT,
     output:
         P["hard_negatives"],
     params:
-        section("hard_negatives", "quality_filter", "special_residues", "contacts", "splits"),
+        section("hard_negatives", "quality_filter", "scope", "special_residues", "contacts", "splits", "test_set"),
     threads: C["workers"]
     log:
         f"{LOGS}/13_hard_negatives.log",
@@ -277,7 +309,7 @@ rule leakage_audit:
     output:
         P["leakage_audit"],
     params:
-        section("clustering", "hard_negatives"),
+        section("clustering", "hard_negatives", "test_set"),
     threads: C["threads"]
     log:
         f"{LOGS}/14_leakage_audit.log",
@@ -285,8 +317,65 @@ rule leakage_audit:
         py("14_leakage_audit")
 
 
+# Provenance record of the run: input lists, query, resolved config, code and
+# software versions. Cheap, so it is rewritten whenever the config changes.
+rule provenance:
+    input:
+        P["test"],
+        P["trainval_splits"],
+        P["hard_negatives"] if C["hard_negatives"]["enabled"] else [],
+        P["leakage_audit"],
+        ID_LISTS,
+        [q] if (q := C.get("scope", {}).get("input_query")) and Path(str(q)).is_file() else [],
+        code=["scripts/provenance.py"] + PY_COMMON,
+    output:
+        P["provenance"],
+    params:
+        str(C),
+    log:
+        f"{LOGS}/provenance.log",
+    shell:
+        py("provenance")
+
+
+# Optional annotation (not part of `all`): PRODIGY-cryst biological/crystal call
+# of every positive, in its own environment (see envs/prodigy_cryst.yml):
+#   snakemake --cores 8 prodigy_cryst
+rule prodigy_cryst:
+    input:
+        P["test"],
+        P["trainval_splits"],
+        code=["scripts/annotate_prodigy_cryst.py"] + PY_COMMON,
+    output:
+        P["prodigy_cryst"],
+    threads: C["workers"]
+    log:
+        f"{LOGS}/prodigy_cryst.log",
+    shell:
+        f"conda run --no-capture-output -n prodigy_cryst python scripts/annotate_prodigy_cryst.py --config {CFG_FILE} "
+        "2>&1 | tee {log}"
+
+
 # Optional exploratory analysis (not part of `all`):
 #   snakemake --cores 1 clustering_stats
+rule leakage_control:
+    # Optional independent leakage control (analysis/leakage_control.py), in its own
+    # environment: conda env create -f envs/leakage_control.yml
+    input:
+        P["test"],
+        P["trainval_splits"],
+        P["hard_negatives"] if C["hard_negatives"]["enabled"] else [],
+        code=["analysis/leakage_control.py", "scripts/14_leakage_audit.py"] + PY_COMMON,
+    output:
+        f"{P['reports_dir']}/leakage_control/summary.json",
+    threads: workflow.cores
+    log:
+        f"{LOGS}/leakage_control.log",
+    shell:
+        f"LEAKAGE_CONTROL_WORKERS={{threads}} conda run --no-capture-output -n leakage_control "
+        f"python analysis/leakage_control.py --config {CFG_FILE} 2>&1 | tee {{log}}"
+
+
 rule clustering_stats:
     input:
         P["clustered"],

@@ -1,0 +1,19 @@
+# Environment for PRODIGY-cryst: the filter of step 08b (scripts/08b_prodigy_filter.py, on by
+# default; prodigy.filter) and the optional annotation (scripts/annotate_prodigy_cryst.py).
+# PRODIGY-cryst 1.0.1 needs Python 3.8 and scikit-learn 0.22 (its model is a
+# pickled scikit-learn 0.22 classifier), so it cannot share the main environment.
+#   conda env create -f envs/prodigy_cryst.yml
+#   conda run -n prodigy_cryst pip install --no-deps prodigy-cryst==1.0.1
+name: prodigy_cryst
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.8
+  - scikit-learn=0.22
+  - numpy=1.20
+  - biopython>=1.79,<1.84
+  - pyyaml
+  - requests
+  - tqdm
+  - pip
