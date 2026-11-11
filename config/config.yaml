@@ -64,7 +64,7 @@ rcsb:
 
 # --- 06 mmCIF enrichment -----------------------------------------------------
 enrichment:
-  homo_similarity: 0.80        # is_homo_80: aligned sequence identity (over the shorter chain) >= this
+  homo_similarity: 0.80        # is_homo: same entity, or aligned sequence identity (over the shorter chain) >= this
   ignore_hydrogens: true
 
 # --- 07 Quality filter (R) ---------------------------------------------------

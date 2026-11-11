@@ -173,9 +173,10 @@ df[, (weight_col) := 1.0 / get(size_col)^as.numeric(cfg$splits$weight_exponent)]
 
 # Save
 # The aliases of step 10 (pair_cluster_XX, A_cluster_XX, B_cluster_XX) and the columns that repeat
-# another one (is_homo01 and is_homo_80 = is_homo; coverage_pct = 100 x coverage) stay internal (the audits
+# another one (is_homo01 and is_homo_80 = is_homo; coverage_pct = 100 x coverage; has_mse_sec =
+# has_special, since step 08 drops every chain with a residue that is not allowed) stay internal (the audits
 # below use them); the exported tables keep the cluster columns of step 09 (pair_cluster_cXX).
-ALIAS_COLS <- grep("^(pair_cluster_[0-9]+|[AB]_cluster_[0-9]+|is_homo01|is_homo_80|mol[AB]_coverage_pct)$", names(df), value = TRUE)
+ALIAS_COLS <- grep("^(pair_cluster_[0-9]+|[AB]_cluster_[0-9]+|is_homo01|is_homo_80|mol[AB]_coverage_pct|(mol[AB]_)?has_mse_sec)$", names(df), value = TRUE)
 fwrite(df[, !ALIAS_COLS, with = FALSE], OUT_CSV)
 cat("OK ->", OUT_CSV, "\n")
 

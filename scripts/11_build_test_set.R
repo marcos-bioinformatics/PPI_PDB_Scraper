@@ -217,9 +217,10 @@ cat(sprintf("Reserved chain clusters at %s %%: %d; training rows removed: %d of 
 aux <- grep("^\\.", names(df_test), value = TRUE)
 df_test[, (aux) := NULL]
 # The aliases of step 10 (pair_cluster_XX, A_cluster_XX, B_cluster_XX) and the columns that repeat
-# another one (is_homo01 and is_homo_80 = is_homo; coverage_pct = 100 x coverage) stay internal:
+# another one (is_homo01 and is_homo_80 = is_homo; coverage_pct = 100 x coverage; has_mse_sec =
+# has_special, since step 08 drops every chain with a residue that is not allowed) stay internal:
 # the exported table keeps the cluster columns of step 09 (molA_cluster_cXX, pair_cluster_cXX).
-alias <- grep("^(pair_cluster_[0-9]+|[AB]_cluster_[0-9]+|is_homo01|is_homo_80|mol[AB]_coverage_pct)$", names(df_test), value = TRUE)
+alias <- grep("^(pair_cluster_[0-9]+|[AB]_cluster_[0-9]+|is_homo01|is_homo_80|mol[AB]_coverage_pct|(mol[AB]_)?has_mse_sec)$", names(df_test), value = TRUE)
 df_test[, (alias) := NULL]
 setcolorder(df_test, c("row_id", "test_bucket", "test_subbucket", "test_unseen_chains"))
 fwrite(df_test, ensure_parent(cfg$paths$test))
