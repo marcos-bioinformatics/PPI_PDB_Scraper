@@ -185,8 +185,8 @@ snakemake --cores 8 --config cfg=config/test.yaml
 python tests/check_outputs.py --config config/test.yaml   # consistency and leakage checks
 ```
 
-Step 11 warns that C1 has 6 of the 10 requested pairs: the test IDs are too few
-to fill it. `tests/check_outputs.py` runs 25 checks on the final tables (sizes,
+Step 11 warns that C1 has fewer than the 10 requested pairs: the test IDs are
+too few to fill it. A run from scratch takes about 10 minutes. `tests/check_outputs.py` runs 25 checks on the final tables (sizes,
 duplicates, test/train overlap, lengths, contacts, labels, the PRODIGY-cryst
 filter and the 11 leakage sets) and fails if any of them does not hold.
 
