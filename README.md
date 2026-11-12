@@ -8,8 +8,6 @@
 > the whole dataset can be regenerated from a list of PDB IDs and a single
 > configuration file. I am now sharing it with the community.
 
-<!-- Introduction written by the author goes here. -->
-
 A reproducible methodology to scrape **protein–protein interfaces (PPIs) from the
 Protein Data Bank** and turn them into a curated, non-redundant dataset for
 machine learning. It combines PDBe-PISA interface energetics with structural
