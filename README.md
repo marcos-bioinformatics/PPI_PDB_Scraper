@@ -15,6 +15,15 @@ quality control, MMseqs2 homology clustering, leakage-free train / validation /
 test splits and hard negatives. The workflow is orchestrated with Snakemake
 (Python + R) and driven by a single configuration file.
 
+PISA is not perfect: its interface calls are computational predictions, and
+the structures alone cannot tell whether two chains that do not touch interact
+elsewhere. Two external sources were added to cover these gaps. PRODIGY-cryst,
+a contact-based classifier independent of PISA, re-checks the small interfaces,
+where biological and crystal contacts overlap most (step 08b), and IntAct, the
+curated database of molecular interactions, is queried for every hard negative
+to drop any with evidence of a direct interaction (step 13). Both are second
+opinions, not ground truth.
+
 ## What it does
 
 From a list of PDB IDs (for example, exported from the RCSB Advanced Search):
