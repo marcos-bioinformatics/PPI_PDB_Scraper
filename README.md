@@ -40,8 +40,11 @@ From a list of PDB IDs (for example, exported from the RCSB Advanced Search):
    checked against **IntAct**;
 8. audits the homology leakage between training and every evaluation set.
 
-Every curation decision, with its reason, precedents, effect and biases, is in
-[docs/DECISIONS.md](docs/DECISIONS.md).
+The pipeline has many parameters, all set in `config/config.yaml`. Some of the
+default values follow precedents from deep-learning models or the literature;
+these are collected, with the reason, effect and biases of every curation
+decision, in [docs/DECISIONS.md](docs/DECISIONS.md). Even so, each user should
+choose these values for their own problem.
 
 ## Reference run
 
