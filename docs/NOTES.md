@@ -46,7 +46,12 @@ editing a script repeats that step and everything downstream of it. Editing
 after a change that does not affect the early steps, `snakemake --touch --until
 <rule>` marks them as up to date. A config can inherit from another one with
 `base: config/config.yaml`; `--config` only accepts `cfg=<file>`, and a target
-goes before it. Every script can also be run by hand from the repository root,
+goes before it. The path of the config file is part of every rule's command,
+so running with another config file on a `data_dir` that already holds outputs
+makes Snakemake rerun every step from 01, downloads included ("Code has changed
+since last execution"). Either edit `config/config.yaml` in place, give the new
+config its own `data_dir`, or add `--rerun-triggers mtime params input
+software-env`, with which only the steps whose config sections changed rerun. Every script can also be run by hand from the repository root,
 e.g. `python scripts/06_enrich_mmcif.py --config config/config.yaml` or
 `Rscript scripts/07_quality_filter.R config/config.yaml`.
 

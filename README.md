@@ -136,7 +136,9 @@ snakemake --cores 8 prodigy_cryst  # optional analyses: prodigy_cryst, leakage_c
 Snakemake reruns only what is missing or out of date: changing a section of the
 config or a script repeats that step and everything after it.
 `snakemake --cores 8 --until quality_filter` stops after a step, and
-`--config cfg=<file>` uses another configuration. [docs/NOTES.md](docs/NOTES.md) has more tips and the
+`--config cfg=<file>` uses another configuration (on a `data_dir` that
+already has outputs, add `--rerun-triggers mtime params input software-env`, or
+every step reruns). [docs/NOTES.md](docs/NOTES.md) has more tips and the
 troubleshooting.
 
 **Quick test.** `config/test.yaml` runs the whole pipeline on 1,500 IDs
