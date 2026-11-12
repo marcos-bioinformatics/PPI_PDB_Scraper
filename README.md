@@ -54,8 +54,8 @@ laptop under WSL2 (20 cores, 14 GB RAM):
 | Redundancy cap (10) | 43,710 pairs |
 | Final dataset (11–13) | **39,747 train/val pairs**, **750 test pairs** (C1 150, C2 300, C3 300), **492 hard negatives**, from 32,989 entries |
 | Leakage audit (14) | 0 leaks by sequence in the 11 audited sets; the 31 output checks pass |
-| Time | about 2 h 20 min with the files on disk; downloading from scratch adds about 6 h for PISA and 1.5 h for the structures |
-| Disk | about 20 GB of raw files, 1.2 GB of intermediate tables, 96 MB of final tables |
+| Time | about 2 h 20 min with the files on disk; downloading from scratch added about 6 h for PISA and 1 h 20 min for the structures (run of 2 November 2026, every assembly) |
+| Disk | about 22 GB of raw files, 1.2 GB of intermediate tables, 66 MB of final tables |
 
 ## Pipeline
 
@@ -90,7 +90,7 @@ measure) and `clustering_stats`.
 ## Installation
 
 Linux x86-64 or WSL2, [conda](https://conda-forge.org/download/) or miniforge,
-about 20 GB of disk for the reference dataset (0.5 GB for the quick test) and
+about 22 GB of disk for the reference dataset (0.5 GB for the quick test) and
 network access to PDBe, RCSB and IntAct.
 
 ```bash
