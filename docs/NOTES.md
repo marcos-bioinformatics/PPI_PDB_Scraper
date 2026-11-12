@@ -30,8 +30,8 @@
   interface: of the 1,839 sequence pairs with interfaces of different area in
   one entry (95 % homomeric), 1,279 keep rows of only one of them.
 - The optional PRODIGY-cryst annotation does not score pairs with a
-  selenocysteine (16 in the reference run) or a position modelled both as
-  selenomethionine and methionine (1).
+  selenocysteine (16 in the reference run), a position modelled both as
+  selenomethionine and methionine (1) or a duplicated atom in the file (1).
 - Steps 01–04 query live services: a rerun of those steps can download updated
   PISA files and metadata while keeping older mmCIF files. To freeze a dataset,
   keep `data/raw/` and `data/interim/` and do not rerun steps 01–04.
