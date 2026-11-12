@@ -6,7 +6,7 @@ authors:
   - given-names: "Marcos"
     family-names: "Elizalde-Horcada"
     alias: marcos-bioinformatics
-version: 1.0.0
+version: 1.1.0
 date-released: "2026-11-12"
 license: MIT
 repository-code: "https://github.com/marcos-bioinformatics/PPI_PDB_Scraper"
