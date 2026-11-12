@@ -84,8 +84,8 @@ protein–protein interface with exactly two protein molecules.
 
 Copied from the assembly block of the same PISA-lite file (PISA's assembly
 analysis of the whole biological assembly, including ligands). All but
-`assembly_interface_count` are empty when PISA-lite gives no assembly values (82
-of 40,616 positives in the current run).
+`assembly_interface_count` are empty when PISA-lite gives no assembly values (81
+of 40,497 positives in the reference run).
 
 | Column | Step | Description |
 |---|---|---|
@@ -136,7 +136,7 @@ RCSB Data API, one value per entry (step 04, joined in step 06).
 | `deposit_date` | 04 | Deposition date (YYYY-MM-DD). |
 | `initial_release_date` | 04 | First release date (YYYY-MM-DD); compared with `scope.max_release_date`. |
 | `revision_date` | 04 | Date of the latest revision (YYYY-MM-DD). |
-| `revision` | 04 | Current revision, `major.minor`. Read it as text with care: the tables were read as numbers on the way, so `1.0` appears as `1` (positives) and `1.10` as `1.1`. |
+| `revision` | 04 | Current revision, `major.minor` (read it as text: `1.10` is not `1.1`). |
 
 ## Homomeric / heteromeric
 

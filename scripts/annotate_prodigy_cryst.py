@@ -21,9 +21,12 @@ one conformer per atom, no HETATM or water), with two differences: only the two
 chains of the pair are kept, so other molecules of the assembly (e.g. nucleic
 acids) do not stop the classification, and selenomethionine (MSE) and
 selenocysteine (SEC), which steps 08 and 13 allow, are scored as their sulphur
-parents (MET, CYS) instead of being removed with the HETATM records (a SeMet
-chain would otherwise lose its methionines and their contacts). Pairs whose own
-chains have a non-standard residue in ATOM records are not scored.
+parents (MET, CYS) when written as HETATM records, instead of being removed
+with them (a SeMet chain would otherwise lose its methionines and their
+contacts). Pairs whose own chains have a non-standard residue in ATOM records
+are not scored: this includes SEC, which the mmCIF files write as ATOM records.
+A position modelled both as MSE and as MET cannot be prepared, and its pairs
+are not scored either.
 """
 
 from __future__ import annotations

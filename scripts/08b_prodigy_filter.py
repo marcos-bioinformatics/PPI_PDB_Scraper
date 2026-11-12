@@ -5,9 +5,9 @@ Biological interfaces and crystal contacts overlap at small interface areas
 (I-03). Among the pairs with interface_area < prodigy.max_area, those that
 PRODIGY-cryst, a contact-based classifier independent of PISA, calls crystal
 (XTAL) are removed. Pairs it cannot score (a non-standard residue in their own
-chains, an unreadable file) are kept and counted. Selenomethionine and
-selenocysteine are scored as methionine and cysteine (see
-annotate_prodigy_cryst.prepare).
+chains, an unreadable file) are kept and counted. Selenomethionine (HETATM
+records) is scored as methionine (see annotate_prodigy_cryst.prepare);
+selenocysteine (ATOM records) is not converted, so its pairs are kept unscored.
 
 Runs only when prodigy.filter is true, in the prodigy_cryst environment
 (PRODIGY-cryst needs Python 3.8 and scikit-learn 0.22):

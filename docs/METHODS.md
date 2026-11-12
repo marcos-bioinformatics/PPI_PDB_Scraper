@@ -10,8 +10,12 @@ precedents, effect and biases, is recorded in [DECISIONS.md](DECISIONS.md).
 - *Pair*: two protein chains of one biological assembly, with a PISA interface
   (a positive) or without one (a hard negative).
 - *Homomeric / heteromeric pair* (`is_homo`): the two chains are the same entity
-  or at least `enrichment.homo_similarity` identical, or not. A homomeric pair is
-  often two chains of a larger homo-oligomer, not a homodimer.
+  or align with at least `enrichment.homo_similarity` identity (0.80), or not.
+  Homomeric therefore includes a protein paired with a truncated form of itself
+  (e.g. the p66–p51 heterodimer of HIV-1 reverse transcriptase), and a
+  heteromeric pair can join two chains of one UniProt accession (e.g. the HA1
+  and HA2 chains of hemagglutinin, cleaved from one precursor). A homomeric pair
+  is often two chains of a larger homo-oligomer, not a homodimer.
 - *Chain cluster* (`molA_cluster_cXX`, `molB_cluster_cXX`): the connected
   component of chains linked at XX % identity (step 09).
 - *Pair cluster* (`pair_cluster_cXX`): the unordered pair of the chain clusters
@@ -115,12 +119,15 @@ crystal (XTAL); pairs it cannot score are kept. Its calls are in
 Above `max_area`, PISA is the only judge of whether an interface is biological.
 `snakemake --cores 8 prodigy_cryst` (optional) annotates every final positive
 in `reports/prodigy_cryst.csv` (`row_id`, `prodigy_class` BIO/XTAL,
-`prodigy_p_bio`). In the full run, step 08b removed 4,487 of the 15,798 pairs
-below 1,000 Å² (28 %; 39 % of the *silver* and 20 % of the *gold* ones), and
-PRODIGY-cryst calls 98.5 % of the final positives biological (97.1 % of the
-test pairs); without step 08b it called 95.0 %, and only 74.3 % of the
-interfaces of 800–1,000 Å² per side. Above `max_area` it still calls 612 final
-positives crystal, 542 of them below 1,250 Å². PRODIGY-cryst is itself a
+`prodigy_p_bio`). Selenomethionine, written as HETATM records, is scored as
+methionine, since PRODIGY-cryst would otherwise remove it with the ligands;
+selenocysteine is not converted, so its pairs are not scored. In the reference
+run, step 08b removed 4,385 of the 15,798 pairs below 1,000 Å² (28 %; 38 % of
+the *silver* and 19 % of the *gold* ones), and PRODIGY-cryst calls 98.7 % of the
+final positives biological (96.8 % of the test pairs); without step 08b it
+called 95.4 %, and only 75.4 % of the interfaces of 800–1,000 Å² per side.
+Above `max_area` it still calls 533 final positives crystal, 479 of them below
+1,250 Å². PRODIGY-cryst is itself a
 predictor: its authors report 74 % accuracy on the independent DC benchmark,
 against 79 % for PISA (Elez *et al.*, 2018).
 
@@ -162,8 +169,11 @@ homologues appear across entries.
    `exact_K_homo` / `exact_K_heter` rows (ranked by coverage, P-value,
    interface area, R-free, resolution and solvation energy), taken from
    different entries where possible, so that the kept copies are not NCS
-   copies of one crystal. In the full run this cap removed 59 % of the rows
-   (105,338 → 43,656).
+   copies of one crystal. In the reference run this cap removed 59 % of the
+   rows (105,440 → 43,710). It looks at sequences, not at interfaces: when one
+   entry has several interfaces of the same sequence pair (the different
+   interfaces of a homotetramer, for instance), the kept rows can all be of one
+   of them.
 2. *Pair-cluster pruning* is optional and off by default (`cluster_pruning`).
    Every distinct sequence pair is kept, point mutants included, and large
    families are down-weighted instead by the family weight of step 12. When it
@@ -179,16 +189,18 @@ homologues appear across entries.
 **Test set (`test_set`, step 11).** The external test set follows the three
 classes of Park and Marcotte (2012): a protein is *seen* if its chain cluster
 at `level` (40 % identity, the low-homology limit of AlphaFold 3) has a row in
-training.
+the train/validation pool (every row not in the test set). Validation is drawn
+from that pool later, so in a given split a seen protein may be only in
+validation.
 
 - **C3, unseen proteins** (`n_c3`): neither protein is seen. Chain clusters are
   held out, and every row that contains one leaves the training pool; a homo
   pair needs one held-out cluster, a hetero pair two.
 - **C2, a new protein with a known partner** (`n_c2`): one protein is held out
-  and the other keeps other partners in training (hetero by definition).
+  and the other keeps other partners in the pool (hetero by definition).
 - **C1, new pairs of seen proteins** (`n_c1`): both proteins are seen, but the
-  whole pair cluster at 40 % is removed, so no training pair joins homologues
-  of both chains.
+  whole pair cluster at 40 % is removed, so no pair of the pool joins
+  homologues of both chains.
 
 Clusters are drawn at random (seeded), only among those with at most
 `max_cluster_rows` rows, so that no large family is emptied from training;
@@ -208,7 +220,13 @@ validation with the same homo/hetero proportion. Splitting by pair cluster
 means that a protein A can appear in training and validation, but no training
 pair joins a homologue of A with a homologue of its partner at the scheme's
 identity: the validation sets measure generalisation to new pairs. At 40 % this
-matches what AlphaFold 3 calls a low-homology interface. The schemes are
+matches what AlphaFold 3 calls a low-homology interface, and most validation
+pairs are of new proteins too: in the reference run, 77 % of the `split_c40`
+validation pairs have neither chain cluster at 40 % in training, against 40 %
+in `split_c60`. Clusters stay whole: a cluster that would overshoot the target
+is still taken if that leaves the total closer to it, so one large family can
+dominate a stratum (an influenza hemagglutinin family of 852 rows makes up two
+thirds of the heteromeric validation rows of `split_c40` in the reference run). The schemes are
 independent splits, so train one model per scheme. `validation_split`
 (`split_c40`) selects the scheme exported as `validation.csv` and the one the
 family weight is computed on: `family_weight_c40` = 1 / n^`weight_exponent`,

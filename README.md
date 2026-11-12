@@ -47,8 +47,8 @@ Every curation decision, with its reason, precedents, effect and biases, is in
 
 ## A full run
 
-Run of 10 November 2026 on 164,000 X-ray entries (resolution ≤ 3.0 Å), on a
-laptop under WSL2 (20 cores, 14 GB RAM):
+Reference run of 10–11 November 2026 on 164,000 X-ray entries (resolution
+≤ 3.0 Å), on a laptop under WSL2 (20 cores, 14 GB RAM):
 
 | Stage | Result |
 |---|---|
@@ -57,19 +57,19 @@ laptop under WSL2 (20 cores, 14 GB RAM):
 | Structures (step 04) | 66,807 assembly mmCIF files, 0 failed downloads |
 | Quality filter (step 07) | 118,044 pairs (3,032 with a membrane-protein chain excluded) |
 | Structure checks (step 08) | 109,825 pairs |
-| Small interfaces (step 08b) | 4,487 of the 15,798 pairs below 1,000 Å² called crystal by PRODIGY-cryst and removed → 105,338 pairs (31,677 unique chain sequences) |
-| Redundancy (step 10) | 43,656 pairs after the cap on identical sequence pairs |
-| Final dataset | **39,866 train/val pairs** (35,877 / 3,989 in `split_c40`), **750 test pairs** (C1 150, C2 300, C3 300), **492 hard negatives**, from 33,074 entries |
+| Small interfaces (step 08b) | 4,385 of the 15,798 pairs below 1,000 Å² called crystal by PRODIGY-cryst and removed → 105,440 pairs (31,722 unique chain sequences) |
+| Redundancy (step 10) | 43,710 pairs after the cap on identical sequence pairs |
+| Final dataset | **39,747 train/val pairs** (35,354 / 4,393 in `split_c40`), **750 test pairs** (C1 150, C2 300, C3 300), **492 hard negatives**, from 32,989 entries |
 | Leakage audit (step 14) | **0 leaks by sequence** in the 11 audited sets |
-| PRODIGY-cryst (optional) | 98.5 % of the 40,601 scored final positives called biological (95.0 % without step 08b) |
-| Time | about 2 h 20 min with the files already on disk (steps 01–07 58 min, 08b 29 min, the other steps of 08–14 about 52 min); PRODIGY-cryst annotation 55 min |
-| Disk | `raw/` 27 GB (it still holds every assembly of the run of 2 November; about 20 GB for a fresh run), `interim/` 1.2 GB, `processed/` 113 MB |
+| PRODIGY-cryst (optional) | 98.7 % of the 40,479 scored final positives called biological (95.4 % without step 08b) |
+| Time | about 2 h 20 min with the files already on disk (steps 01–07 58 min, 08b 29 min, the other steps of 08–14 about 52 min); PRODIGY-cryst annotation 55 min; independent leakage control about 1 h 20 min |
+| Disk | `raw/` 27 GB (it still holds every assembly of the run of 2 November; about 20 GB for a fresh run), `interim/` 1.2 GB, `processed/` 96 MB |
 
 A run from scratch also downloads the PISA files and the structures: in the
 run of 2 November 2026 that took 6 h 03 min for PISA and 1 h 22 min for
 93,029 assembly files (every assembly, the default then; the first assembly
-only needs 66,807). In the final dataset 75.6 % of the train/val pairs are
-*gold* (P-value < 0.2) and 79.7 % are homomeric.
+only needs 66,807). In the final dataset 75.4 % of the train/val pairs are
+*gold* (P-value < 0.2) and 79.6 % are homomeric.
 
 ## Pipeline
 
@@ -186,9 +186,10 @@ python tests/check_outputs.py --config config/test.yaml   # consistency and leak
 ```
 
 Step 11 warns that C1 has fewer than the 10 requested pairs: the test IDs are
-too few to fill it. A run from scratch takes about 10 minutes. `tests/check_outputs.py` runs 25 checks on the final tables (sizes,
-duplicates, test/train overlap, lengths, contacts, labels, the PRODIGY-cryst
-filter and the 11 leakage sets) and fails if any of them does not hold.
+too few to fill it. A run from scratch takes about 10 minutes. `tests/check_outputs.py` runs 31 checks on the final tables (sizes,
+duplicates, test/train overlap, lengths, contacts, the hard negatives, parse
+errors, failed IntAct queries, the PRODIGY-cryst filter and the 11 leakage
+sets) and fails if any of them does not hold.
 
 ## Clustering and leakage: a project-specific choice
 
@@ -208,10 +209,15 @@ structure or below 30 % identity. `analysis/leakage_control.py` measures the
 first kind with global alignments (EMBOSS needleall, as GraphPart) and two
 identity definitions: *A*, identical positions over the alignment length
 (GraphPart), and *B*, over the length of the evaluation chain (AlphaFold 3),
-counted only with a significant local alignment. Most leaks by A are the same
-protein with a different construct (expression tags, linkers, termini), which
-the 90 % coverage rule does not link; leaks by B are shared domains. The
-coverage is the main lever:
+counted only with a significant local alignment. Leaks by A are chains that
+share a long region with a reference chain, sometimes the same protein expressed
+as another construct (expression tags, linkers, termini), which the 90 %
+coverage rule does not link; leaks by B are mostly shared domains. In the
+reference run the control finds, by A / B, 3 / 20 of the 435 C3 chains, 3 / 13
+of the 292 unseen C2 chains and 43 / 95 of the 4,393 `split_c40` validation
+pairs. The coverage is the main lever; these simulations were run on the data
+before the selenomethionine fix of step 08b, which keeps 102 more pairs in the
+reference run and gives it a different validation draw:
 
 | `clustering.coverage` | Largest chain cluster at 40 % | C3 chains leaking, A / B | C2 unseen chains, A / B | `split_c40` validation pairs, A / B | Step 14 |
 |---|---|---|---|---|---|
@@ -224,8 +230,8 @@ chains families together through multidomain proteins (at 0.50 the largest
 training family at 40 % grows from 3,670 to 9,300 rows, and the test negatives
 fall from 342 to 206), and more links sit at the edge of what the heuristic
 MMseqs2 search finds (with 0.80, a homomeric validation pair at exactly 40 %
-identity is linked in step 14 but was not in step 09). Leaks by B in
-validation also depend on which families the random split sends there. The parameters to change are
+identity is linked in step 14 but was not in step 09). Leaks in validation
+also depend on which families the random split sends there. The parameters to change are
 `clustering.coverage`, `clustering.cov_mode`, `clustering.thresholds`,
 `test_set.level`, `splits.schemes` and `hard_negatives.conflict_level`;
 `snakemake leakage_control` then measures the result with the independent
@@ -262,16 +268,32 @@ threshold, the test class or the split columns, the gold/silver `tier` and
 
 - The homo filter of step 13 only removes identical sequences, not the
   `is_homo` definition of step 06 (the conflict filter usually catches the rest).
-- The hard negatives come from few large complexes (35 % from proteasome
-  entries in the full run, 106 families at 40 % among the 342 test negatives)
-  and none is homomeric: evaluate them per family and against heteromeric
-  positives only.
-- C1 has 91 homomeric and 59 heteromeric pairs in the full run, not 75 and 75:
-  only 59 heteromeric pair clusters leave both proteins with other partners in
-  training, and homomeric pairs fill the class.
-- `revision` is read as a number on the way, so `1.0` appears as `1` and
-  `1.10` as `1.1` (3 entries of the reference run); read it as text and
-  compare it with `revision_date`.
+- The hard negatives come from few large complexes (35 % from proteasome and
+  24 % from ribosome entries in the reference run; the 289 test negatives come
+  from 77 families at 40 %, 54 % of them from these two kinds of complex) and
+  none is homomeric: evaluate them per family and against heteromeric positives
+  only. The IntAct check finds no contradiction rather than confirming them:
+  almost all IntAct records for these pairs are expanded from n-ary complexes.
+- C1 has 96 homomeric and 54 heteromeric pairs in the reference run, not 75 and
+  75: only 54 heteromeric pair clusters leave both proteins with other partners
+  in the train/validation pool, and homomeric pairs fill the class.
+- A *seen* protein (test classes) is one with a row in the train/validation
+  pool, so in a given split it may be only in validation. Validation is mostly
+  not "known proteins with new partners": in `split_c40`, 77 % of the
+  validation pairs have neither protein (chain cluster at 40 %) in training.
+- In `split_c40`, one influenza hemagglutinin family of 852 rows makes up two
+  thirds of the heteromeric validation rows: a cluster that does not fit the
+  10 % target is still taken if that leaves the total closer to it.
+- `is_homo` means the same entity or an aligned identity of at least 0.80, so
+  it includes pairs of a protein and its truncated form (e.g. the p66–p51
+  heterodimer of HIV-1 reverse transcriptase), and heteromeric pairs can share
+  a UniProt accession (e.g. hemagglutinin HA1–HA2, cleaved from one precursor).
+- The cap on identical sequence pairs (step 10) does not look at the
+  interface: of the 1,839 sequence pairs with interfaces of different area in
+  one entry (95 % homomeric), 1,279 keep rows of only one of them.
+- The optional PRODIGY-cryst annotation does not score pairs with a
+  selenocysteine (16 in the reference run) or a position modelled both as
+  selenomethionine and methionine (1).
 - Steps 01–04 query live services: a rerun of those steps can download updated
   PISA files and metadata while keeping older mmCIF files. To freeze a dataset,
   keep `data/raw/` and `data/interim/` and do not rerun steps 01–04.
