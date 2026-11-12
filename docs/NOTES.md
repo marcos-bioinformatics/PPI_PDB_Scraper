@@ -7,12 +7,13 @@
 - The hard negatives come from few large complexes (35 % from proteasome and
   24 % from ribosome entries in the reference run; the 289 test negatives come
   from 77 families at 40 %, 54 % of them from these two kinds of complex) and
-  none is homomeric: evaluate them per family and against heteromeric positives
-  only. The IntAct check finds no contradiction rather than confirming them:
+  none joins identical sequences (2 join chains of one cluster at 95 %): evaluate
+  them per family and against heteromeric positives only. The IntAct check finds no contradiction rather than confirming them:
   almost all IntAct records for these pairs are expanded from n-ary complexes.
 - C1 has 96 homomeric and 54 heteromeric pairs in the reference run, not 75 and
-  75: only 54 heteromeric pair clusters leave both proteins with other partners
-  in the train/validation pool, and homomeric pairs fill the class.
+  75: heteromeric pair clusters whose proteins keep other partners in the
+  train/validation pool run out as the class is filled, and homomeric pairs
+  fill it.
 - The splits are by pair cluster, so a protein can appear in training and in
   validation with different partners. A *seen* protein (test classes) is one
   with a row in the train/validation pool, so in a given split it may be only

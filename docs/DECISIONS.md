@@ -466,7 +466,7 @@ splits · N hard negatives · U leakage audit · P provenance and reproducibilit
 - **Decision:** By default no pair cluster is pruned: large families keep all their distinct pairs and are down-weighted by the family weight of S-06. If pair-cluster pruning is enabled (R-03), clusters with more than `activate_n` rows are pruned as in R-05.
 - **Reason:** A weight keeps the data and corrects the over-representation, as comparable training sets do.
 - **Precedent:** AF2 accepts chains with probability inverse to the size of their cluster [Jumper2021], and AF3 weights by 1/N_clust [Abramson2024]. No published activation threshold for pruning was found.
-- **Effect:** No pair cluster is pruned. Of the 17,216 pair clusters at 95 %, 1,966 have more than 8 rows after step 08b (71,045 rows, 67.4 %). Previous behaviour (pruning on): stage 2 reduced 52,085 rows to 43,164.
+- **Effect:** No pair cluster is pruned. Of the 17,216 pair clusters at 95 %, 1,966 have more than 8 rows after step 08b (71,045 rows, 67.4 %); after the exact-pair cap of R-01, which runs first, 560 do (11,051 of the 43,710 rows, 25.3 %), and those are the ones pruning would act on. Previous behaviour (pruning on): stage 2 reduced 52,085 rows to 43,164.
 - **Bias / limitation:** The weight is a column of the output: a model that ignores it sees large families at full weight.
 - **Configuration:** `pruning.cluster_pruning` (false), `pruning.activate_n` (8, only with pruning on); `splits.weight_exponent` (0.5).
 - **Status:** `implemented`
@@ -615,7 +615,7 @@ splits · N hard negatives · U leakage audit · P provenance and reproducibilit
 - **Decision:** A C1 pair is taken with its whole pair cluster at 40 %, only if both of its chain clusters keep other partners in training.
 - **Reason:** It is the pair-level novelty that AlphaFold 3 requires for a low-homology interface, the same level as the conflict filter of the hard negatives (N-07).
 - **Precedent:** AlphaFold 3 leaves an interface out of its low-homology set if both chains have more than 40 % identity to two chains of the same training complex [Abramson2024]. Close homologues that interact "almost invariably interact the same way" [Aloy2003].
-- **Effect:** 150 C1 pairs, 96 homomeric and 54 heteromeric: the selection finds only 54 heteromeric pair clusters whose two proteins keep other partners in the train/validation pool, and homo pairs fill the class (T-09). Before the filter of step 08b (I-02), 75 homo and 75 hetero.
+- **Effect:** 150 C1 pairs, 96 homomeric and 54 heteromeric: heteromeric pair clusters whose two proteins keep other partners in the train/validation pool run out as the class is filled, and homo pairs fill the class (T-09). Before the filter of step 08b (I-02), 75 homo and 75 hetero.
 - **Status:** `implemented`
 
 ### T-06 · One representative per pair cluster
@@ -749,7 +749,7 @@ splits · N hard negatives · U leakage audit · P provenance and reproducibilit
 - **Reason:** A copy of a protein that does not touch another copy usually contradicts a homo interface elsewhere in the complex.
 - **Precedent:** Negatome drops pairs that map to the same UniProt accession [Smialowski2010].
 - **Effect:** 1,611,626 → 771,147 candidates.
-- **Bias / limitation:** 79.6 % of the train/validation positives are homomeric and no negative is, so "identical sequences → positive" is a shortcut a model can learn [Park2012; Bernett2024]. Near-identical chains pass this filter; the conflict filter (N-07) usually removes them.
+- **Bias / limitation:** 79.6 % of the train/validation positives are homomeric and no negative joins identical sequences, so "identical sequences → positive" is a shortcut a model can learn [Park2012; Bernett2024]. Near-identical chains pass this filter; the conflict filter (N-07) usually removes them.
 - **Configuration:** `hard_negatives.include_homo` (false).
 - **Status:** `implemented`
 
@@ -817,7 +817,7 @@ splits · N hard negatives · U leakage audit · P provenance and reproducibilit
 - **Reason:** For a test pair it matters whether its proteins resemble proteins of the training negatives, not only of the positives [Hamp2015]; negatives therefore follow the separation of the positives, and a family of negatives is never split between training and evaluation.
 - **Precedent:** Bernett et al. apply the same partition of the proteome to positives and negatives [Bernett2024]; DirectContacts2 keeps complexes, pairs and proteins disjoint between training and test [Claussen2026].
 - **Effect:** In `split_c40`, 155 training, 48 validation and 289 test negatives (`split_c60`: 137, 66 and 289). The 289 test negatives come from 77 families at 40 %, the largest with 37; 133 come from proteasome entries. 0 leaks at pair level at 40 % (U-01).
-- **Bias / limitation:** The test negatives are concentrated in few families and none is homomeric: evaluate them per family and against heteromeric positives only. Most negatives (289 of 492) are in the test set, because a negative with a protein held out by step 11, or of the same family as one, goes there.
+- **Bias / limitation:** The test negatives are concentrated in few families and none joins identical sequences (2 join chains of one cluster at 95 %): evaluate them per family and against heteromeric positives only. Most negatives (289 of 492) are in the test set, because a negative with a protein held out by step 11, or of the same family as one, goes there.
 - **Configuration:** `hard_negatives.family_level` (c40, the same as `conflict_level`).
 - **Status:** `implemented`
 
