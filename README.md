@@ -40,11 +40,8 @@ From a list of PDB IDs (for example, exported from the RCSB Advanced Search):
    checked against **IntAct**;
 8. audits the homology leakage between training and every evaluation set.
 
-The pipeline has many parameters, all set in `config/config.yaml`. Some of the
-default values follow precedents from deep-learning models or the literature;
-these are collected, with the reason, effect and biases of every curation
-decision, in [docs/DECISIONS.md](docs/DECISIONS.md). Even so, each user should
-choose these values for their own problem.
+Every curation decision, with its reason, precedents, effect and biases, is in
+[docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Reference run
 
@@ -111,13 +108,24 @@ conda activate ppi_pdb_scraper
 PRODIGY-cryst environment, set `prodigy.filter: false` to skip step 08b. The
 optional leakage control has its own environment (`envs/leakage_control.yml`).
 
+## Configuration
+
+The pipeline has many parameters, all set in `config/config.yaml`. Some of the
+default values follow precedents from deep-learning models or the literature;
+these are collected, with the reason, effect and biases of every curation
+decision, in [docs/DECISIONS.md](docs/DECISIONS.md). Even so, each user should
+choose these values for their own problem.
+
+[docs/METHODS.md](docs/METHODS.md) explains what each parameter does, and a
+configuration can inherit from the default one with `base: config/config.yaml`
+and change only what it needs (as `config/test.yaml` does).
+
 ## Usage
 
 1. Put the ID list(s) in `pdb_ids/` (the `.txt` files of *Download IDs* in the
    RCSB Advanced Search) and, optionally, the query in `scope.input_query`. The
    repository includes the 17 lists of the reference run.
-2. Review `config/config.yaml`: every threshold lives there, and
-   [docs/METHODS.md](docs/METHODS.md) explains them.
+2. Review the parameters in `config/config.yaml` (see *Configuration*).
 3. Run from the repository root:
 
 ```bash
@@ -130,8 +138,7 @@ snakemake --cores 8 prodigy_cryst  # optional analyses: prodigy_cryst, leakage_c
 Snakemake reruns only what is missing or out of date: changing a section of the
 config or a script repeats that step and everything after it.
 `snakemake --cores 8 --until quality_filter` stops after a step, and
-`--config cfg=<file>` uses another configuration (which can inherit from the
-default with `base:`). [docs/NOTES.md](docs/NOTES.md) has more tips and the
+`--config cfg=<file>` uses another configuration. [docs/NOTES.md](docs/NOTES.md) has more tips and the
 troubleshooting.
 
 **Quick test.** `config/test.yaml` runs the whole pipeline on 1,500 IDs
