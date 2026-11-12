@@ -172,17 +172,28 @@ df[is.na(get(size_col)), (size_col) := 1L]
 df[, (weight_col) := 1.0 / get(size_col)^as.numeric(cfg$splits$weight_exponent)]
 
 # Save
-# The aliases of step 10 (pair_cluster_XX, A_cluster_XX, B_cluster_XX) and the columns that repeat
-# another one (is_homo01 and is_homo_80 = is_homo; coverage_pct = 100 x coverage; has_mse_sec =
-# has_special, since step 08 drops every chain with a residue that is not allowed) stay internal (the audits
-# below use them); the exported tables keep the cluster columns of step 09 (pair_cluster_cXX).
-ALIAS_COLS <- grep("^(pair_cluster_[0-9]+|[AB]_cluster_[0-9]+|is_homo01|is_homo_80|mol[AB]_coverage_pct|(mol[AB]_)?has_mse_sec)$", names(df), value = TRUE)
+# Columns left out of the exported tables (they stay in the interim tables; the audits below use the aliases):
+#  - aliases of step 10 (pair_cluster_XX, A_cluster_XX, B_cluster_XX); the exported tables keep the
+#    cluster columns of step 09 (molA_cluster_cXX, pair_cluster_cXX);
+#  - columns that repeat others: is_homo01 and is_homo_80 (= is_homo), coverage_pct (100 x coverage),
+#    has_mse_sec, the has_special/number_special/special_residues summaries (molA_special_residues and
+#    molB_special_residues hold the same), missing_residues (SEQRES minus resolved), pair_seq_exact
+#    (the two sequences), chain_instance_id_A/B, chain_pair_id and source_file (from pdb_id,
+#    assembly_id and the chain IDs);
+#  - columns that are constant after the filters: pair_index_in_interface, the PISA molecule IDs,
+#    classes and counts, number_disulfide_bonds and number_covalent_bonds (PISA-lite leaves them at 0),
+#    has_entry_meta, has_chainA_asm, has_chainB_asm, and the special_status/special_error of step 08;
+#  - number_interface_residues_raw, which is not an interface count.
+ALIAS_COLS <- grep(paste0("^(pair_cluster_[0-9]+|[AB]_cluster_[0-9]+|is_homo01|is_homo_80|mol[AB]_coverage_pct|(mol[AB]_)?has_mse_sec",
+             "|pair_seq_exact|chain_instance_id_[AB]|chain_pair_id|source_file|mol[AB]_missing_residues",
+             "|(mol[AB]_)?has_special|(mol[AB]_)?number_special|special_residues|mol[AB]_special_(status|error)",
+             "|pair_index_in_interface|number_(disulfide|covalent)_bonds|(protein|other)_molecule_count",
+             "|mol[AB]_molecule_(id|class)|has_entry_meta|has_chain[AB]_asm|number_interface_residues_raw)$"), names(df), value = TRUE)
 fwrite(df[, !ALIAS_COLS, with = FALSE], OUT_CSV)
 cat("OK ->", OUT_CSV, "\n")
 
 # Validation set: rows marked "val" in the chosen split
 df_val <- df[get(SPLIT_FOR_WEIGHT) == "val"]
-df_val[, `:=`(test_bucket = "VAL", test_subbucket = "VAL")]
 fwrite(df_val[, !ALIAS_COLS, with = FALSE], ensure_parent(cfg$paths$validation))
 cat("OK ->", cfg$paths$validation, "(", nrow(df_val), "rows )\n")
 

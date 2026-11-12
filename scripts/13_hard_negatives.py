@@ -41,8 +41,7 @@ validation positives of that scheme; else "train". Negatives of the same pair
 cluster at hard_negatives.family_level (c40 by default) all get the most
 restrictive split of the group (test > val > train), so a family of negatives
 is never split between sets. Proteins shared by train and test (as
-in C1) do not pull a negative into the test set. The
-column `split` repeats the scheme chosen in splits.validation_split.
+in C1) do not pull a negative into the test set.
 Missing or unreadable PISA files stop the step (they would hide contacts).
 """
 
@@ -332,7 +331,6 @@ def main() -> None:
 
     test = pd.read_csv(paths["test"], keep_default_na=False, na_values=[""], low_memory=False)
     tv = pd.read_csv(paths["trainval_splits"], keep_default_na=False, na_values=[""], low_memory=False)
-    split_col = cfg["splits"]["validation_split"]
 
     def uids(df: pd.DataFrame) -> Set[str]:
         return set(df["molA_seq"].map(seq_uid)) | set(df["molB_seq"].map(seq_uid))
@@ -359,10 +357,10 @@ def main() -> None:
         row_split = worst.map({v: k for k, v in rank.items()})
         cand[scheme] = row_split
         counts.update({f"{scheme}_{k}": int(v) for k, v in cand[scheme].value_counts().items()})
-    cand["split"] = cand[split_col]
     cand.insert(4, "label", 0)
-    # coverage_pct repeats coverage x 100; the positives do not export it either
-    cand = cand.drop(columns=["uidA", "uidB", "_pair", "_cov", "molA_coverage_pct", "molB_coverage_pct"])
+    # coverage_pct repeats coverage x 100, as in the positives; a negative has no contacts by definition
+    cand = cand.drop(columns=["uidA", "uidB", "_pair", "_cov", "molA_coverage_pct", "molB_coverage_pct",
+                              "n_atom_contacts", "n_residue_contacts"])
 
     dest = ensure_parent(paths["hard_negatives"])
     tmp = dest.with_name(dest.name + ".part")

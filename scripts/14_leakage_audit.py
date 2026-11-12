@@ -88,7 +88,7 @@ def evaluation_sets(cfg: Dict) -> Tuple[List[tuple], Dict[str, str]]:
 
     # (set name, its pairs, reference pairs, design level, design threshold, chains to check or None)
     sets = []
-    neg_ref = (uid_pairs(negatives[negatives["split"] != "test"]) if negatives is not None else [])
+    neg_ref = (uid_pairs(negatives[negatives[cfg["splits"]["validation_split"]] != "test"]) if negatives is not None else [])
     L = float(cfg["test_set"]["level"])
     for bucket, g in test.groupby("test_bucket"):
         level = "chain" if bucket == "C3" else "pair"
@@ -108,8 +108,8 @@ def evaluation_sets(cfg: Dict) -> Tuple[List[tuple], Dict[str, str]]:
     if negatives is not None:
         level = str(cfg["hard_negatives"]["conflict_level"])
         thr = int(level[1:]) / 100 if re.fullmatch(r"c\d+", level) else None
-        ref = uid_pairs(tv) + uid_pairs(negatives[negatives["split"] != "test"])
-        sets.append(("hard_negatives_test", uid_pairs(negatives[negatives["split"] == "test"]), ref, "pair", thr, None))
+        ref = uid_pairs(tv) + uid_pairs(negatives[negatives[cfg["splits"]["validation_split"]] != "test"])
+        sets.append(("hard_negatives_test", uid_pairs(negatives[negatives[cfg["splits"]["validation_split"]] == "test"]), ref, "pair", thr, None))
 
     seq_of: Dict[str, str] = {}
     for df in [test, tv] + ([negatives] if negatives is not None else []):
