@@ -6,18 +6,19 @@ the top of [METHODS.md](METHODS.md). Paths are relative to `data_dir` (`data/`).
 
 | Table | Rows | Columns |
 |---|---|---|
-| `processed/test.csv` | test positives (classes C1, C2, C3) | 120 |
-| `processed/trainval_splits.csv` | every positive not in the test set, with its split in each scheme | 121 |
-| `processed/validation.csv` | the rows of `trainval_splits.csv` marked `val` in `splits.validation_split` (`split_c40`) | 123 |
-| `processed/hard_negatives.csv` | hard negatives | 59 |
+| `processed/test.csv` | test positives (classes C1, C2, C3) | 89 |
+| `processed/trainval_splits.csv` | every positive not in the test set, with its split in each scheme | 90 |
+| `processed/validation.csv` | the rows of `trainval_splits.csv` marked `val` in `splits.validation_split` (`split_c40`) | 90 |
+| `processed/hard_negatives.csv` | hard negatives | 56 |
 | `reports/prodigy_cryst.csv` | optional (`snakemake prodigy_cryst`): PRODIGY-cryst call for every positive | 10 |
 
-- Every positive table has the same 117 columns, one row per pair (one PISA
+- Every positive table has the same 86 columns, one row per pair (one PISA
   interface between two protein chains). `test.csv` adds the class columns
   (`test_bucket`, `test_subbucket`, `test_unseen_chains`); `trainval_splits.csv`
-  adds the split and weight columns (`split_c60`, `split_c40`,
-  `cluster_size_train_c40`, `family_weight_c40`); `validation.csv` has those and
-  `test_bucket`, `test_subbucket` (both `VAL`).
+  and `validation.csv` add the split and weight columns (`split_c60`,
+  `split_c40`, `cluster_size_train_c40`, `family_weight_c40`).
+- Columns that repeat others or are constant after the filters are not
+  exported; they stay in the intermediate tables of `interim/` (see *Notes*).
 - `molA_` and `molB_` are the two chains of the pair: in the positives, the
   first and second molecule of the PISA interface (PISA's order, not sorted); in
   the hard negatives, the two chains in alphabetical order of chain ID. Such
@@ -35,23 +36,18 @@ the top of [METHODS.md](METHODS.md). Paths are relative to `data_dir` (`data/`).
 
 | Column | Step | Description |
 |---|---|---|
-| `row_id` | 10 | Unique key of a positive: `pdb_id\|assembly_id\|interface_id\|pair_index_in_interface\|molA_chain_id\|molB_chain_id` (e.g. `6a34\|1\|1\|1\|A\|B`). |
+| `row_id` | 10 | Unique key of a positive: `pdb_id\|assembly_id\|interface_id\|pair_index_in_interface\|molA_chain_id\|molB_chain_id`, where `pair_index_in_interface` is always 1 (e.g. `6a34\|1\|1\|1\|A\|B`). |
 | `pdb_id` | 02 | PDB ID, lower case. |
 | `assembly_id` | 02 | Biological assembly number (with `assemblies.selection: first`, the lowest current assembly ID of the entry). |
 | `interface_id` | 02 | PISA interface ID within the assembly. |
-| `pair_index_in_interface` | 02 | Always 1 (one pair per PISA interface); part of `row_id`. |
 | `molA_chain_id`, `molB_chain_id` | 02 | Author chain ID in the assembly file (`auth_asym_id`); symmetry copies carry a suffix, e.g. `A-2`. |
-| `chain_instance_id_A`, `chain_instance_id_B` | 10 | Chain instance: `pdb_id\|assembly_id\|chain_id`. |
-| `chain_pair_id` | 10 | The two chain instance IDs in sorted order, joined with `\|\|` (order-invariant). |
-| `pair_seq_exact` | 10 | The two chain sequences (`molA_seq`, `molB_seq`) in sorted order, joined with `\|\|`; equal values mean identical sequence pairs (the key of the exact-pair cap of step 10). |
-| `source_file` | 02 | Path of the PISA-lite JSON file the row was parsed from (`raw/pisa/<xy>/<id>_assembly<n>_interfaces.json.gz`). |
 
 ## Test classes and splits
 
 | Column | Step | Description |
 |---|---|---|
-| `test_bucket` | 11, 12 | Class of a test pair: `C3` (both proteins unseen), `C2` (one unseen), `C1` (both seen, pair unseen), with "seen" at `test_set.level` (40 %). `VAL` in `validation.csv`. |
-| `test_subbucket` | 11, 12 | Class and kind (from `is_homo`): `C3_homo`, `C3_hetero`, `C2_hetero`, `C1_homo`, `C1_hetero`. `VAL` in `validation.csv`. |
+| `test_bucket` | 11 | Class of a test pair: `C3` (both proteins unseen), `C2` (one unseen), `C1` (both seen, pair unseen), with "seen" at `test_set.level` (40 %). |
+| `test_subbucket` | 11 | Class and kind (from `is_homo`): `C3_homo`, `C3_hetero`, `C2_hetero`, `C1_homo`, `C1_hetero`. |
 | `test_unseen_chains` | 11 | Chains whose chain cluster at `test_set.level` is held out of training: `AB` (C3), `A` or `B` (C2); empty for C1. |
 | `split_c60`, `split_c40` | 12 | Split of the pair in each scheme (pair clusters at 60 % and 40 %): `train` or `val`. Independent splits. Always `val` for `split_c40` in `validation.csv`. |
 | `cluster_size_train_c40` | 12 | Rows of the pair's family (`pair_cluster_c40`) that are `train` in `split_c40`; 1 if the family has no training rows (every `val` row). |
@@ -69,16 +65,9 @@ protein–protein interface with exactly two protein molecules.
 | `solvation_energy` | 02 | PISA ΔiG, solvation free energy gain of interface formation (kcal/mol; negative = hydrophobic interface). |
 | `stabilization_energy` | 02 | PISA interface energy that adds hydrogen-bond and salt-bridge terms to ΔiG (kcal/mol); in this dataset ≈ `solvation_energy` − 0.44 × H-bonds − 0.37 × salt bridges (fit, not documented in the file). |
 | `molA_interface_residues`, `molB_interface_residues` | 02 | Residues of the chain with buried surface area > 0 in this interface (count of positive values in PISA's per-residue `buried_surface_areas`). |
-| `number_interface_residues_raw` | 02 | PISA-lite's `number_interface_residues`, as is. Not an interface count: it equals the length of the second molecule's (molB) residue list in the PISA file, i.e. about the modelled residues of molB (= `molB_resolved_count` in 86 % of rows). Do not use as interface size. |
 | `number_hydrogen_bonds` | 02 | Interchain hydrogen bonds (PISA). |
 | `number_salt_bridges` | 02 | Interchain salt bridges (PISA). |
-| `number_disulfide_bonds` | 02 | Interchain disulfide bonds (PISA). |
-| `number_covalent_bonds` | 02 | Interchain covalent bonds (PISA). |
 | `number_other_bonds` | 02 | PISA "other bonds": interchain atom pairs listed in the file's `other_bonds` block (2.0–4.0 Å in a sample), i.e. van der Waals contacts. |
-| `protein_molecule_count` | 02 | Protein molecules in the interface (always 2). |
-| `other_molecule_count` | 02 | Non-protein molecules in the interface (always 0). |
-| `molA_molecule_id`, `molB_molecule_id` | 02 | PISA molecule ID within the interface (1 and 2). |
-| `molA_molecule_class`, `molB_molecule_class` | 02 | PISA molecule class (always `Protein`). |
 
 ## PISA assembly
 
@@ -112,7 +101,6 @@ with at least one non-hydrogen atom of occupancy > 0.
 | `molA_seq_len`, `molB_seq_len` | 06 | Length of `seq` (residues); 40–1,000 after step 07. |
 | `molA_seqres_count_chain`, `molB_seqres_count_chain` | 06 | SEQRES positions of the chain (`_pdbx_poly_seq_scheme`); can exceed `seq_len` by the terminal caps or `X` removed from `seq`. Positives only. |
 | `molA_resolved_count`, `molB_resolved_count` | 06 | Resolved SEQRES positions. Positives only. |
-| `molA_missing_residues`, `molB_missing_residues` | 06 | `seqres_count_chain` − `resolved_count`. Positives only. |
 | `molA_coverage`, `molB_coverage` | 06 | `resolved_count / seqres_count_chain` (fraction 0–1); > 0.86 after step 07 with `coverage_metric: coverage`. |
 | `molA_internal_coverage`, `molB_internal_coverage` | 06 | Resolved residues / SEQRES positions from the first to the last resolved one (fraction 0–1): disordered tags and tails do not count, internal gaps do. |
 | `molA_missing_nterm`, `molB_missing_nterm` | 06 | Unresolved SEQRES positions before the first resolved residue. |
@@ -150,8 +138,6 @@ RCSB Data API, one value per entry (step 04, joined in step 06).
 
 | Column | Step | Description |
 |---|---|---|
-| `has_entry_meta` | 06 | RCSB entry metadata found. Always TRUE (other rows are dropped in step 06). |
-| `has_chainA_asm`, `has_chainB_asm` | 06 | The chain and its sequence were found in the assembly file. Always TRUE (other rows are dropped in step 06). |
 | `tier` | 07 | `gold` if `p_value` < `quality_filter.gold_max_p_value` (0.2), else `silver` (0.2 ≤ P ≤ 0.4). |
 
 ## Structure checks
@@ -165,12 +151,7 @@ chain.
 
 | Column | Step | Description |
 |---|---|---|
-| `molA_has_special`, `molB_has_special` | 08 | The chain has at least one residue of `special_residues.allowed`. |
-| `molA_number_special`, `molB_number_special` | 08 | Number of modelled residues of `special_residues.allowed` in the chain. |
 | `molA_special_residues`, `molB_special_residues` | 08 | Allowed special residues and counts, `NAME:count` joined with `;` (e.g. `MSE:4`); empty if none. |
-| `molA_special_status`, `molB_special_status` | 08 | `ok`, or `forbidden_or_error` (forbidden residue or structure error; such rows are excluded). Always `ok`. |
-| `molA_special_error`, `molB_special_error` | 08 | Forbidden residues (`NAME:count;...`) or the structure error (`chain_not_found`, `parse_error:<exception>`). Always empty. |
-| `has_special`, `number_special`, `special_residues` | 08 | The same three values for both chains together (counts summed). |
 | `n_atom_contacts` | 08 | Interchain heavy-atom pairs within `contacts.cutoff` (≤ 5 Å). |
 | `n_residue_contacts` | 08 | Residue pairs (one per chain) with at least one heavy-atom pair within `contacts.cutoff`; ≥ `contacts.min_residue_contacts` (1) in the positives. |
 | `min_interchain_distance` | 08 | Shortest heavy-atom distance between the two chains (Å, 3 decimals). |
@@ -196,10 +177,8 @@ connected_components`).
 `hard_negatives.csv` (step 13): two protein chains of the same assembly with no
 PISA interface between them. Columns shared with the positives, with the same
 meaning: `pdb_id`, `assembly_id`, `molA_chain_id`, `molB_chain_id`, the chain
-columns except `seqres_count_chain`, `resolved_count` and `missing_residues`
-(the entity ID is `molA_entity_id`, `molB_entity_id`), the entry metadata,
-`n_atom_contacts`, `n_residue_contacts`, `min_interchain_distance` and the
-cluster columns (taken from the clustering of the positives in step 09; every
+columns except `seqres_count_chain` and `resolved_count` (the entity ID is `molA_entity_id`, `molB_entity_id`), the entry metadata,
+`min_interchain_distance` and the cluster columns (taken from the clustering of the positives in step 09; every
 negative chain has a sequence clustered there). There are no PISA, homo/hetero,
 tier, special-residue, clash or gap columns and no `row_id`.
 
@@ -207,12 +186,10 @@ tier, special-residue, clash or gap columns and no `row_id`.
 |---|---|---|
 | `label` | 13 | Always 0 (negative). |
 | `n_protein_chains_assembly` | 13 | Protein (polypeptide) chains in the assembly file, symmetry copies included. |
-| `n_atom_contacts`, `n_residue_contacts` | 13 | As in step 08; always 0, since `hard_negatives.min_distance` (6 Å) exceeds `contacts.cutoff` (5 Å). |
 | `min_interchain_distance` | 13 | As in step 08 (Å); ≥ `hard_negatives.min_distance` (6 Å) and ≤ `max_distance` if set. |
 | `intact_evidences` | 13 | IntAct evidences (MITAB 2.7 rows, PSICQUIC) summed over every pair of UniProt accessions of the two chains (different accessions only). Empty if there is no such pair (a chain without UniProt accession, or both chains with only the same one) or a query failed. Absent if `hard_negatives.intact.enabled` is false. |
 | `intact_direct_evidences` | 13 | The subset of those evidences that are binary (no spoke or matrix expansion) and of type direct interaction (MI:0407 or a PSI-MI descendant). Empty in the same cases. With `intact.drop_direct`, negatives with a value > 0 are dropped, so it is 0 or empty. |
 | `split_c60`, `split_c40` | 13 | Split in each scheme of step 12: `test` if a chain occurs only in test positives or belongs to a chain cluster held out by step 11; else `val` if a chain occurs only in validation positives of the scheme; else `train`. All negatives of a family (`hard_negatives.family_level`, c40) take the most restrictive split of the group (test > val > train). |
-| `split` | 13 | Copy of the scheme of `splits.validation_split` (`split_c40`). |
 
 ## PRODIGY-cryst report
 
@@ -238,23 +215,35 @@ without a definition in the file; their descriptions follow PISA's documentation
 and checks on the data, not this pipeline's code:
 `stabilization_energy` (relation to H-bonds and salt bridges fitted on the
 data), `number_other_bonds` (inferred from the bond list in the file),
-`number_covalent_bonds`, and the `assembly_*` values (`dissociation_energy`,
+and the `assembly_*` values (`dissociation_energy`,
 `solvation_energy_gain`, `entropy`, `dissociation_area`,
 `accessible_surface_area`, `buried_surface_area`, `formula`, `composition`).
 
-**Constant columns** in the final tables (kept for compatibility):
+**Columns not exported.** The intermediate tables (`interim/`) keep them; the
+final tables leave them out because they repeat other columns or are constant
+after the filters:
 
-- Forced by the code or the filters, in every positive table:
-  `pair_index_in_interface` (1), `protein_molecule_count` (2),
-  `other_molecule_count` (0), `molA_molecule_class`/`molB_molecule_class`
-  (`Protein`), `has_entry_meta`, `has_chainA_asm`, `has_chainB_asm` (TRUE),
-  `molA_special_status`/`molB_special_status` (`ok`),
-  `molA_special_error`/`molB_special_error` (empty), `exptl_method`
-  (`X-RAY DIFFRACTION`, also in the hard negatives).
-- Constant in the current run but not forced: `molA_molecule_id` (1),
-  `molB_molecule_id` (2) (PISA's numbering), `number_disulfide_bonds` (0),
-  `number_covalent_bonds` (0), `assembly_id` (1 in every table).
-- `validation.csv`: `test_bucket`, `test_subbucket` (`VAL`), `split_c40`
-  (`val`), `cluster_size_train_c40`, `family_weight_c40` (1).
-- `hard_negatives.csv`: `label` (0), `n_atom_contacts`, `n_residue_contacts` (0),
-  `intact_direct_evidences` (0 or empty).
+- repeated: `has_special`, `number_special` and `special_residues` (per chain
+  and for the pair; `molA_special_residues` and `molB_special_residues` hold
+  the same), `molA_missing_residues`/`molB_missing_residues` (`seqres_count_chain`
+  − `resolved_count`), `pair_seq_exact` (the two sequences), `chain_instance_id_A`,
+  `chain_instance_id_B`, `chain_pair_id` and `source_file` (from `pdb_id`,
+  `assembly_id` and the chain IDs), and the `split` copy of `split_c40` in the
+  hard negatives;
+- constant: `pair_index_in_interface` (1), `protein_molecule_count` (2),
+  `other_molecule_count` (0), `molA_molecule_id`/`molB_molecule_id` (1, 2),
+  `molA_molecule_class`/`molB_molecule_class` (`Protein`),
+  `number_disulfide_bonds` and `number_covalent_bonds` (PISA-lite leaves them
+  at 0), `has_entry_meta`, `has_chainA_asm`, `has_chainB_asm` (TRUE), the
+  `special_status` (`ok`) and `special_error` (empty) of step 08, `test_bucket`
+  and `test_subbucket` in `validation.csv` (`VAL`), and `n_atom_contacts`,
+  `n_residue_contacts` in the hard negatives (0);
+- `number_interface_residues_raw`, PISA-lite's `number_interface_residues`,
+  which is not an interface count (about the modelled residues of molB).
+
+**Constant columns that stay**, because they depend on the configuration or
+are needed to join tables: `exptl_method` (`X-RAY DIFFRACTION`, from
+`quality_filter.exptl_method`), `assembly_id` (1, with `assemblies.selection:
+first`); in `validation.csv`, `split_c40` (`val`), `cluster_size_train_c40` and
+`family_weight_c40` (1); in `hard_negatives.csv`, `label` (0) and
+`intact_direct_evidences` (0 or empty).
