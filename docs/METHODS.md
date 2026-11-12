@@ -284,4 +284,50 @@ without the coverage rule, so that a single shared domain in multidomain
 proteins also counts (`design_threshold_leaks_without_coverage_rule`); that
 second audit is reported, not enforced. The optional independent control
 (`analysis/leakage_control.py`) audits the same sets with global-alignment
-identities instead; see *Clustering and leakage* in the README.
+identities instead; see *Clustering and leakage* below.
+
+## Clustering and leakage: a project-specific choice
+
+How strictly training and evaluation data must be separated depends on what a
+model has to generalise to, so these criteria are a choice of each project, not
+a property of the data. The defaults follow common practice:
+two chains are linked when MMseqs2 aligns them at the threshold identity with
+an alignment that covers at least 90 % of either chain; clusters are the
+connected components; the test classes and the `split_c40` validation are
+separated at 40 % identity (the AlphaFold 3 low-homology level) and `split_c60`
+at 60 %.
+
+What the defaults guarantee: no evaluation chain or pair has a homologue in its
+reference data *by this criterion* (step 14; `tests/check_outputs.py` fails
+otherwise). What they do not: chains linked only through a shorter alignment, by
+structure or below 30 % identity. `analysis/leakage_control.py` measures the
+first kind with global alignments (EMBOSS needleall, as GraphPart) and two
+identity definitions: *A*, identical positions over the alignment length
+(GraphPart), and *B*, over the length of the evaluation chain (AlphaFold 3),
+counted only with a significant local alignment. Leaks by A are chains that
+share a long region with a reference chain, sometimes the same protein expressed
+as another construct (expression tags, linkers, termini), which the 90 %
+coverage rule does not link; leaks by B are mostly shared domains. In the
+reference run the control finds, by A / B, 3 / 20 of the 435 C3 chains, 3 / 13
+of the 292 unseen C2 chains and 43 / 95 of the 4,393 `split_c40` validation
+pairs. The coverage is the main lever; these simulations were run on the data
+before the selenomethionine fix of step 08b, which keeps 102 more pairs in the
+reference run and gives it a different validation draw:
+
+| `clustering.coverage` | Largest chain cluster at 40 % | C3 chains leaking, A / B | C2 unseen chains, A / B | `split_c40` validation pairs, A / B | Step 14 |
+|---|---|---|---|---|---|
+| 0.90 (default) | 5,065 sequences (16 %) | 6 / 22 of 431 | 3 / 21 of 286 | 9 / 84 of 3,989 | 0 leaks |
+| 0.80 | 5,069 (16 %) | 2 / 9 of 429 | 2 / 9 of 289 | 0 / 225 of 4,007 | 2 rows (one pair) linked in step 14 but not in step 09 |
+| 0.50 | 8,592 (27 %) | 1 / 4 of 430 | 0 / 9 of 289 | 0 / 31 of 4,009 | 0 leaks |
+
+Lowering the coverage removes most construct leaks, but single linkage then
+chains families together through multidomain proteins (at 0.50 the largest
+training family at 40 % grows from 3,670 to 9,300 rows, and the test negatives
+fall from 342 to 206), and more links sit at the edge of what the heuristic
+MMseqs2 search finds (with 0.80, a homomeric validation pair at exactly 40 %
+identity is linked in step 14 but was not in step 09). Leaks in validation
+also depend on which families the random split sends there. The parameters to change are
+`clustering.coverage`, `clustering.cov_mode`, `clustering.thresholds`,
+`test_set.level`, `splits.schemes` and `hard_negatives.conflict_level`;
+`snakemake leakage_control` then measures the result with the independent
+criterion.

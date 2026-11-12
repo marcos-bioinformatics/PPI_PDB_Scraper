@@ -703,7 +703,7 @@ splits · N hard negatives · U leakage audit · P provenance and reproducibilit
 - **Status:** `implemented`
 
 ### S-05 · Allow a protein in training and validation with different partners
-- **Decision:** Because the splits are by pair cluster (S-01), a protein can appear in training and in validation with different partners. The README declares it.
+- **Decision:** Because the splits are by pair cluster (S-01), a protein can appear in training and in validation with different partners. `docs/NOTES.md` declares it among the known issues.
 - **Reason:** This is acceptable: validation can then include cases close to training, known proteins with new partners.
 - **Precedent:** Park and Marcotte show that estimates from test pairs whose proteins are both in training do not generalise to new proteins, and accept that setting provided "this limitation should then be noted" [Park2012]. Bernett et al. share no protein between training and test in their gold standard, and show that when proteins are shared, models learn sequence similarity and node degree [Bernett2024].
 - **Effect:** In `split_c40`, 899 of the 4,393 validation pairs have both chain clusters at 40 % in training, 103 one and 3,391 (77 %) neither; in `split_c60`, 2,095, 295 and 1,586 of 3,976.
@@ -876,7 +876,7 @@ splits · N hard negatives · U leakage audit · P provenance and reproducibilit
 - **Reason:** PDBe recomputes PISA-lite weekly with the archive [Leines2026] and the wwPDB versions every entry [wwPDBproc]. Archiving intermediate results ("Record All Intermediate Results", rule 5) is what makes a run reproducible [Sandve2013].
 - **Precedent:** PINDER publishes versioned releases (current version `2024-02`) [Kovtun2024]; Dockground rebuilds its bound set weekly with the PDB [Collins2022].
 - **Effect:** `data/raw/` takes 27 GB and `data/interim/` 1.2 GB.
-- **Bias / limitation:** A rerun can mix new PISA files with older mmCIF files, whose coordinates may no longer be those PISA analysed (README, Known issues).
+- **Bias / limitation:** A rerun can mix new PISA files with older mmCIF files, whose coordinates may no longer be those PISA analysed (`docs/NOTES.md`, Known issues).
 - **Status:** `implemented`
 
 ### P-03 · Fixed random seeds
